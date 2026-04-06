@@ -111,10 +111,10 @@ class Settings:
             openrouter_site_name=os.getenv("OPENROUTER_SITE_NAME") or None,
             ai_profile_brief=os.getenv(
                 "AI_PROFILE_BRIEF",
-                "Ищу интересные проекты, связанные с backend, автоматизацией, Telegram-ботами, API и Python.",
+                "Ищу интересные проекты по разработке ПО: backend, frontend, fullstack, mobile, боты, API, интеграции, автоматизация, DevOps, data и AI.",
             ),
             ai_extra_instructions=os.getenv(
                 "AI_EXTRA_INSTRUCTIONS",
-                "Считай интересными проекты с внятным ТЗ, реалистичным бюджетом и шансом на быстрый отклик.",
+                "Считай релевантными любые задачи, где нужна реальная разработка, код, интеграции или техническая логика, а не только Python-заказы.",
             ),
         )

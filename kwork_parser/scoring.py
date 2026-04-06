@@ -167,9 +167,29 @@ class OpenRouterScorer:
                     {
                         "role": "system",
                         "content": (
-                            "Ты оцениваешь новые заказы Kwork для фрилансера. "
+                            "Ты анализируешь новые заказы с фриланс-биржи и определяешь, "
+                            "насколько они релевантны разработчику программного обеспечения. "
+                            "Считай релевантными любые задачи, связанные с backend, frontend, "
+                            "fullstack, mobile, Telegram-ботами, чат-ботами, API, интеграциями, "
+                            "CRM, парсингом, автоматизацией, DevOps, базами данных, AI/LLM, "
+                            "исправлением багов, рефакторингом, поддержкой и доработкой кода "
+                            "на любых языках и стеках, включая Python, JavaScript, TypeScript, "
+                            "Node.js, React, Vue, PHP, Laravel, Symfony, WordPress с кастомной "
+                            "разработкой, Go, Java, Kotlin, Spring, C#, .NET, C++, Rust, Ruby, "
+                            "Rails, Swift, Objective-C, Dart, Flutter, React Native, Android, "
+                            "iOS, SQL, PostgreSQL, MySQL, MongoDB, Redis, Docker, Kubernetes, "
+                            "Bash и Linux. Не считай релевантными чистый дизайн, логотипы, "
+                            "баннеры, тексты, переводы, SEO без разработки, озвучку, монтаж, "
+                            "SMM, лидогенерацию, размещение рекламы и наполнение контентом без "
+                            "программирования. Если задача на WordPress, Tilda, Bitrix, Shopify, "
+                            "Webflow, OpenCart, Wix или похожей платформе включает код, "
+                            "интеграции, API, модули, нестандартную логику или автоматизацию, "
+                            "считай её релевантной. Отдавай приоритет проектам с понятным ТЗ, "
+                            "реалистичным бюджетом и реальной технической задачей. "
                             "Верни строго JSON без markdown в формате "
-                            '{"score": 0-100, "summary": "краткий вывод", "reasons": ["...", "..."]}.'
+                            '{"is_relevant": true, "score": 0-100, "summary": "краткий вывод", '
+                            '"reasons": ["...", "..."], '
+                            '"category": "backend|frontend|fullstack|bot|automation|integration|mobile|devops|data|ai|other-dev|non-dev"}.'
                         ),
                     },
                     {
@@ -184,9 +204,12 @@ class OpenRouterScorer:
         data = response.json()
         content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         parsed = self._extract_json(content)
+        score = clamp_score(float(parsed.get("score", 0)))
+        if parsed.get("is_relevant") is False:
+            score = min(score, 39.0)
         return ScoreResult(
-            score=clamp_score(float(parsed.get("score", 0))),
-            summary=str(parsed.get("summary", "AI summary is empty")).strip(),
+            score=score,
+            summary=self._build_summary(parsed),
             reasons=[str(item).strip() for item in parsed.get("reasons", []) if str(item).strip()],
         )
 
@@ -199,3 +222,17 @@ class OpenRouterScorer:
         if not match:
             raise ValueError(f"Could not parse OpenRouter JSON response: {text!r}")
         return json.loads(match.group(0))
+
+    def _build_summary(self, parsed: dict) -> str:
+        summary = str(parsed.get("summary", "AI summary is empty")).strip()
+        category = str(parsed.get("category", "")).strip()
+        is_relevant = parsed.get("is_relevant")
+
+        parts = []
+        if is_relevant is not None:
+            parts.append("relevant" if bool(is_relevant) else "non-relevant")
+        if category:
+            parts.append(category)
+        if summary:
+            parts.append(summary)
+        return " | ".join(parts) if parts else "AI summary is empty"
