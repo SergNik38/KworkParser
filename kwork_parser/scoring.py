@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 import requests
 
@@ -166,31 +168,7 @@ class OpenRouterScorer:
                 "messages": [
                     {
                         "role": "system",
-                        "content": (
-                            "Ты анализируешь новые заказы с фриланс-биржи и определяешь, "
-                            "насколько они релевантны разработчику программного обеспечения. "
-                            "Считай релевантными любые задачи, связанные с backend, frontend, "
-                            "fullstack, mobile, Telegram-ботами, чат-ботами, API, интеграциями, "
-                            "CRM, парсингом, автоматизацией, DevOps, базами данных, AI/LLM, "
-                            "исправлением багов, рефакторингом, поддержкой и доработкой кода "
-                            "на любых языках и стеках, включая Python, JavaScript, TypeScript, "
-                            "Node.js, React, Vue, PHP, Laravel, Symfony, WordPress с кастомной "
-                            "разработкой, Go, Java, Kotlin, Spring, C#, .NET, C++, Rust, Ruby, "
-                            "Rails, Swift, Objective-C, Dart, Flutter, React Native, Android, "
-                            "iOS, SQL, PostgreSQL, MySQL, MongoDB, Redis, Docker, Kubernetes, "
-                            "Bash и Linux. Не считай релевантными чистый дизайн, логотипы, "
-                            "баннеры, тексты, переводы, SEO без разработки, озвучку, монтаж, "
-                            "SMM, лидогенерацию, размещение рекламы и наполнение контентом без "
-                            "программирования. Если задача на WordPress, Tilda, Bitrix, Shopify, "
-                            "Webflow, OpenCart, Wix или похожей платформе включает код, "
-                            "интеграции, API, модули, нестандартную логику или автоматизацию, "
-                            "считай её релевантной. Отдавай приоритет проектам с понятным ТЗ, "
-                            "реалистичным бюджетом и реальной технической задачей. "
-                            "Верни строго JSON без markdown в формате "
-                            '{"is_relevant": true, "score": 0-100, "summary": "краткий вывод", '
-                            '"reasons": ["...", "..."], '
-                            '"category": "backend|frontend|fullstack|bot|automation|integration|mobile|devops|data|ai|other-dev|non-dev"}.'
-                        ),
+                        "content": load_system_prompt(),
                     },
                     {
                         "role": "user",
@@ -236,3 +214,9 @@ class OpenRouterScorer:
         if summary:
             parts.append(summary)
         return " | ".join(parts) if parts else "AI summary is empty"
+
+
+@lru_cache(maxsize=1)
+def load_system_prompt() -> str:
+    prompt_path = Path(__file__).with_name("prompts") / "development_filter_system_prompt.txt"
+    return prompt_path.read_text(encoding="utf-8").strip()
