@@ -1,0 +1,280 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+import sqlite3
+from pathlib import Path
+
+from kwork_parser.app import Application
+from kwork_parser.config import Settings
+from kwork_parser.models import Project
+from kwork_parser.notifier import TelegramFeedbackPoll, TelegramFeedbackUpdate, TelegramNotifier
+from kwork_parser.scoring import ScoreResult
+from kwork_parser.storage import ProjectFeedback, Storage
+
+
+def make_settings(database_path: Path | None = None) -> Settings:
+    return Settings(
+        poll_interval_seconds=45,
+        request_timeout_seconds=20,
+        request_retries=1,
+        retry_backoff_seconds=1,
+        max_pages=1,
+        database_path=database_path or Path(":memory:"),
+        skip_existing_on_first_run=False,
+        min_rule_score=55.0,
+        min_ai_score=70.0,
+        min_price=None,
+        max_price=None,
+        min_hiring_percent=None,
+        category_ids=[],
+        include_keywords=[],
+        exclude_keywords=[],
+        dry_run=False,
+        telegram_bot_token="token",
+        telegram_chat_id="chat",
+        openrouter_api_key=None,
+        openrouter_model=None,
+        openrouter_site_url=None,
+        openrouter_site_name=None,
+        ai_profile_brief="",
+        ai_extra_instructions="",
+    )
+
+
+def make_project() -> Project:
+    return Project.from_api(
+        {
+            "id": "1001",
+            "name": "Python Telegram bot",
+            "description": "Need Python automation for Telegram API",
+            "priceLimit": "10000",
+            "max_days": "5",
+            "user": {
+                "username": "customer",
+                "data": {
+                    "wants_hired_percent": "50",
+                },
+            },
+            "wantUserGetProfileUrl": "https://kwork.ru/user/customer",
+            "kwork_count": "2",
+            "views_dirty": "10",
+        }
+    )
+
+
+class FakeResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def raise_for_status(self) -> None:
+        return
+
+    def json(self) -> dict:
+        return self.payload
+
+
+class FakeTelegramSession:
+    def __init__(self, updates: list[dict]) -> None:
+        self.updates = updates
+        self.get_calls: list[dict] = []
+        self.post_calls: list[dict] = []
+
+    def get(self, url: str, params: dict, timeout: int) -> FakeResponse:
+        self.get_calls.append({"url": url, "params": params, "timeout": timeout})
+        return FakeResponse({"ok": True, "result": self.updates})
+
+    def post(self, url: str, json: dict, timeout: int) -> FakeResponse:
+        self.post_calls.append({"url": url, "json": json, "timeout": timeout})
+        return FakeResponse({"ok": True})
+
+
+class FakeFeedbackNotifier:
+    def __init__(self) -> None:
+        self.answered: list[tuple[str, str]] = []
+
+    def fetch_feedback(self, offset: int | None) -> TelegramFeedbackPoll:
+        self.offset = offset
+        return TelegramFeedbackPoll(
+            actions=[
+                TelegramFeedbackUpdate(
+                    project_id=1001,
+                    feedback="interesting",
+                    update_id=42,
+                    callback_query_id="callback-1",
+                    telegram_user_id=123,
+                    telegram_username="user",
+                    payload={"update_id": 42},
+                )
+            ],
+            next_offset=43,
+        )
+
+    def answer_feedback(self, callback_query_id: str, feedback: str) -> None:
+        self.answered.append((callback_query_id, feedback))
+
+
+class TelegramFeedbackTests(unittest.TestCase):
+    def test_message_contains_description_reasons_and_buttons(self) -> None:
+        notifier = TelegramNotifier(make_settings())
+        project = make_project()
+
+        message = notifier._format_message(
+            project,
+            ScoreResult(78, "rule ok", ["keyword", "budget"]),
+            ScoreResult(85, "ai ok", ["technical task"]),
+        )
+        markup = notifier._build_reply_markup(project)
+
+        self.assertIn("<b>Описание:</b>", message)
+        self.assertIn("Need Python automation", message)
+        self.assertIn("Rule причины", message)
+        self.assertIn("AI причины", message)
+        callback_data = [
+            button.get("callback_data")
+            for row in markup["inline_keyboard"]
+            for button in row
+            if "callback_data" in button
+        ]
+        self.assertEqual(
+            callback_data,
+            [
+                "fb:1001:interesting",
+                "fb:1001:miss",
+                "fb:1001:hide_similar",
+            ],
+        )
+
+    def test_fetch_feedback_parses_callbacks_and_advances_offset(self) -> None:
+        notifier = TelegramNotifier(make_settings())
+        notifier.session = FakeTelegramSession(
+            [
+                {
+                    "update_id": 10,
+                    "callback_query": {
+                        "id": "callback-1",
+                        "from": {"id": 123, "username": "user"},
+                        "data": "fb:1001:miss",
+                    },
+                },
+                {
+                    "update_id": 11,
+                    "callback_query": {
+                        "id": "callback-2",
+                        "from": {"id": 123},
+                        "data": "ignored",
+                    },
+                },
+            ]
+        )
+
+        poll = notifier.fetch_feedback(offset=None)
+
+        self.assertEqual(poll.next_offset, 12)
+        self.assertEqual(len(poll.actions), 1)
+        self.assertEqual(poll.actions[0].project_id, 1001)
+        self.assertEqual(poll.actions[0].feedback, "miss")
+        self.assertEqual(poll.actions[0].telegram_user_id, 123)
+        self.assertEqual(poll.actions[0].telegram_username, "user")
+
+    def test_application_sync_saves_feedback_and_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = Application(make_settings(Path(tmpdir) / "kwork_parser.db"))
+            fake_notifier = FakeFeedbackNotifier()
+            app.notifier = fake_notifier
+
+            saved = app._sync_telegram_feedback()
+
+            feedback = app.storage.get_feedback(1001, 123)
+            self.assertEqual(saved, 1)
+            self.assertIsNotNone(feedback)
+            self.assertEqual(feedback.feedback, "interesting")
+            self.assertEqual(feedback.telegram_user_id, 123)
+            self.assertEqual(app.storage.get_telegram_update_offset(), 43)
+            self.assertEqual(fake_notifier.answered, [("callback-1", "interesting")])
+
+    def test_storage_keeps_feedback_per_telegram_user(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(Path(tmpdir) / "kwork_parser.db")
+
+            storage.save_feedback(
+                ProjectFeedback(
+                    project_id=1001,
+                    feedback="interesting",
+                    telegram_user_id=123,
+                    telegram_username="first",
+                    payload={"source": "first"},
+                )
+            )
+            storage.save_feedback(
+                ProjectFeedback(
+                    project_id=1001,
+                    feedback="miss",
+                    telegram_user_id=456,
+                    telegram_username="second",
+                    payload={"source": "second"},
+                )
+            )
+            storage.save_feedback(
+                ProjectFeedback(
+                    project_id=1001,
+                    feedback="hide_similar",
+                    telegram_user_id=123,
+                    telegram_username="first",
+                    payload={"source": "updated"},
+                )
+            )
+
+            first_feedback = storage.get_feedback(1001, 123)
+            second_feedback = storage.get_feedback(1001, 456)
+            all_feedback = storage.list_feedback(1001)
+
+            self.assertEqual(first_feedback.feedback, "hide_similar")
+            self.assertEqual(first_feedback.payload, {"source": "updated"})
+            self.assertEqual(second_feedback.feedback, "miss")
+            self.assertEqual(len(all_feedback), 2)
+
+    def test_storage_migrates_old_single_project_feedback_table(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "kwork_parser.db"
+            connection = sqlite3.connect(db_path)
+            connection.execute(
+                """
+                CREATE TABLE project_feedback (
+                    project_id INTEGER PRIMARY KEY,
+                    feedback TEXT NOT NULL,
+                    telegram_user_id INTEGER,
+                    telegram_username TEXT,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    payload_json TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO project_feedback (
+                    project_id, feedback, telegram_user_id, telegram_username, payload_json
+                ) VALUES (1001, 'interesting', 123, 'user', '{}')
+                """
+            )
+            connection.commit()
+            connection.close()
+
+            storage = Storage(db_path)
+            storage.save_feedback(
+                ProjectFeedback(
+                    project_id=1001,
+                    feedback="miss",
+                    telegram_user_id=456,
+                    telegram_username="second",
+                    payload={"source": "second"},
+                )
+            )
+
+            self.assertEqual(storage.get_feedback(1001, 123).feedback, "interesting")
+            self.assertEqual(storage.get_feedback(1001, 456).feedback, "miss")
+            self.assertEqual(len(storage.list_feedback(1001)), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

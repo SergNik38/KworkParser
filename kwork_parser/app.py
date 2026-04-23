@@ -8,7 +8,7 @@ from .kwork import KworkClient
 from .models import Project
 from .notifier import TelegramNotifier
 from .scoring import OpenRouterScorer, RuleScorer, ScoreResult
-from .storage import Storage
+from .storage import ProjectFeedback, Storage
 
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,8 @@ class Application:
         self.notifier = TelegramNotifier(settings)
 
     def run_once(self) -> int:
+        self._sync_telegram_feedback()
+
         bootstrap_mode = self.settings.skip_existing_on_first_run and self.storage.is_empty()
         new_project_ids: list[int] = []
 
@@ -105,3 +107,39 @@ class Application:
         if not self.ai_scorer:
             return None
         return self.ai_scorer.score(project, rule_result)
+
+    def _sync_telegram_feedback(self) -> int:
+        if not self.settings.telegram_enabled:
+            return 0
+
+        try:
+            poll = self.notifier.fetch_feedback(self.storage.get_telegram_update_offset())
+        except Exception:
+            logger.warning("Telegram feedback polling failed", exc_info=True)
+            return 0
+
+        for action in poll.actions:
+            self.storage.save_feedback(
+                ProjectFeedback(
+                    project_id=action.project_id,
+                    feedback=action.feedback,
+                    telegram_user_id=action.telegram_user_id,
+                    telegram_username=action.telegram_username,
+                    payload=action.payload,
+                )
+            )
+            try:
+                self.notifier.answer_feedback(action.callback_query_id, action.feedback)
+            except Exception:
+                logger.warning(
+                    "Telegram feedback callback answer failed for project %s",
+                    action.project_id,
+                    exc_info=True,
+                )
+
+        if poll.next_offset is not None:
+            self.storage.set_telegram_update_offset(poll.next_offset)
+
+        if poll.actions:
+            logger.info("Saved %s Telegram feedback actions", len(poll.actions))
+        return len(poll.actions)

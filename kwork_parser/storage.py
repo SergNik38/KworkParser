@@ -16,6 +16,15 @@ class NotificationCandidate:
     ai_result: ScoreResult | None
 
 
+@dataclass(slots=True)
+class ProjectFeedback:
+    project_id: int
+    feedback: str
+    telegram_user_id: int | None
+    telegram_username: str
+    payload: dict
+
+
 class Storage:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -48,7 +57,29 @@ class Storage:
             )
             """
         )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_feedback (
+                project_id INTEGER NOT NULL,
+                feedback TEXT NOT NULL,
+                telegram_user_id INTEGER NOT NULL DEFAULT 0,
+                telegram_username TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                payload_json TEXT NOT NULL,
+                PRIMARY KEY (project_id, telegram_user_id)
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
         self._migrate_schema()
+        self._migrate_feedback_schema()
         self.connection.commit()
 
     def _migrate_schema(self) -> None:
@@ -80,6 +111,49 @@ class Storage:
                 END
             """
         )
+
+    def _migrate_feedback_schema(self) -> None:
+        columns = self.connection.execute("PRAGMA table_info(project_feedback)").fetchall()
+        primary_key_columns = [row["name"] for row in sorted(columns, key=lambda row: row["pk"]) if row["pk"]]
+        telegram_user_column = next(
+            (row for row in columns if row["name"] == "telegram_user_id"),
+            None,
+        )
+        has_composite_key = primary_key_columns == ["project_id", "telegram_user_id"]
+        telegram_user_required = bool(telegram_user_column and telegram_user_column["notnull"])
+        if has_composite_key and telegram_user_required:
+            return
+
+        self.connection.execute(
+            """
+            CREATE TABLE project_feedback_new (
+                project_id INTEGER NOT NULL,
+                feedback TEXT NOT NULL,
+                telegram_user_id INTEGER NOT NULL DEFAULT 0,
+                telegram_username TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                payload_json TEXT NOT NULL,
+                PRIMARY KEY (project_id, telegram_user_id)
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            INSERT OR REPLACE INTO project_feedback_new (
+                project_id, feedback, telegram_user_id, telegram_username, updated_at, payload_json
+            )
+            SELECT
+                project_id,
+                feedback,
+                COALESCE(telegram_user_id, 0),
+                telegram_username,
+                updated_at,
+                payload_json
+            FROM project_feedback
+            """
+        )
+        self.connection.execute("DROP TABLE project_feedback")
+        self.connection.execute("ALTER TABLE project_feedback_new RENAME TO project_feedback")
 
     def is_known(self, project_id: int) -> bool:
         row = self.connection.execute(
@@ -227,6 +301,97 @@ class Storage:
         )
         self.connection.commit()
 
+    def save_feedback(self, feedback: ProjectFeedback) -> None:
+        telegram_user_id = self._feedback_user_id(feedback.telegram_user_id)
+        self.connection.execute(
+            """
+            INSERT INTO project_feedback (
+                project_id, feedback, telegram_user_id, telegram_username, updated_at, payload_json
+            ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            ON CONFLICT(project_id, telegram_user_id) DO UPDATE SET
+                feedback = excluded.feedback,
+                telegram_username = excluded.telegram_username,
+                updated_at = CURRENT_TIMESTAMP,
+                payload_json = excluded.payload_json
+            """,
+            (
+                feedback.project_id,
+                feedback.feedback,
+                telegram_user_id,
+                feedback.telegram_username,
+                json.dumps(feedback.payload, ensure_ascii=False),
+            ),
+        )
+        self.connection.commit()
+
+    def get_feedback(self, project_id: int, telegram_user_id: int | None = None) -> ProjectFeedback | None:
+        if telegram_user_id is None:
+            row = self.connection.execute(
+                """
+                SELECT project_id, feedback, telegram_user_id, telegram_username, payload_json
+                FROM project_feedback
+                WHERE project_id = ?
+                ORDER BY updated_at DESC, telegram_user_id DESC
+                LIMIT 1
+                """,
+                (project_id,),
+            ).fetchone()
+        else:
+            row = self.connection.execute(
+                """
+                SELECT project_id, feedback, telegram_user_id, telegram_username, payload_json
+                FROM project_feedback
+                WHERE project_id = ? AND telegram_user_id = ?
+                """,
+                (project_id, self._feedback_user_id(telegram_user_id)),
+            ).fetchone()
+        if not row:
+            return None
+        return self._feedback_from_row(row)
+
+    def list_feedback(self, project_id: int) -> list[ProjectFeedback]:
+        rows = self.connection.execute(
+            """
+            SELECT project_id, feedback, telegram_user_id, telegram_username, payload_json
+            FROM project_feedback
+            WHERE project_id = ?
+            ORDER BY updated_at DESC, telegram_user_id DESC
+            """,
+            (project_id,),
+        ).fetchall()
+        return [self._feedback_from_row(row) for row in rows]
+
+    def _feedback_from_row(self, row: sqlite3.Row) -> ProjectFeedback:
+        return ProjectFeedback(
+            project_id=int(row["project_id"]),
+            feedback=row["feedback"],
+            telegram_user_id=int(row["telegram_user_id"]) if row["telegram_user_id"] else None,
+            telegram_username=row["telegram_username"] or "",
+            payload=json.loads(row["payload_json"]),
+        )
+
+    def get_telegram_update_offset(self) -> int | None:
+        row = self.connection.execute(
+            "SELECT value FROM app_state WHERE key = 'telegram_update_offset'"
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            return int(row["value"])
+        except (TypeError, ValueError):
+            return None
+
+    def set_telegram_update_offset(self, offset: int) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO app_state (key, value)
+            VALUES ('telegram_update_offset', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (str(offset),),
+        )
+        self.connection.commit()
+
     def _candidate_from_row(self, row: sqlite3.Row) -> NotificationCandidate:
         raw = json.loads(row["payload_json"])
         rule_result = ScoreResult(
@@ -254,3 +419,6 @@ class Storage:
         if not isinstance(parsed, list):
             return []
         return [str(item) for item in parsed]
+
+    def _feedback_user_id(self, telegram_user_id: int | None) -> int:
+        return telegram_user_id if telegram_user_id is not None else 0
