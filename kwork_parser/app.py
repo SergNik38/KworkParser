@@ -98,7 +98,6 @@ class Application:
 
             try:
                 self.notifier.send(project, rule_result, ai_result)
-                self._send_response_draft(project, rule_result, ai_result, variant="default")
             except Exception as exc:
                 self.storage.mark_error(project.id, f"Telegram notification failed: {exc}")
                 logger.warning(
@@ -217,7 +216,7 @@ class Application:
                 self.notifier.answer_feedback(action.callback_query_id, "Проект не найден в базе")
                 return
 
-            variant = "default" if action.action == "regenerate" else action.action
+            variant = "default" if action.action in {"generate", "regenerate"} else action.action
             generated = self._send_response_draft(
                 candidate.project,
                 candidate.rule_result,

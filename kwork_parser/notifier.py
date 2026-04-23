@@ -21,6 +21,7 @@ FEEDBACK_ACTION_LABELS = {
     "hide_similar": "Скрыть похожие",
 }
 DRAFT_ACTION_LABELS = {
+    "generate": "Отклик",
     "regenerate": "Переделать отклик",
     "short": "Короче",
     "questions": "Добавить вопросы",
@@ -271,9 +272,15 @@ class TelegramNotifier:
                 ],
                 [
                     {
+                        "text": DRAFT_ACTION_LABELS["generate"],
+                        "callback_data": f"draft:{project.id}:generate",
+                    },
+                    {
                         "text": FEEDBACK_ACTION_LABELS["hide_similar"],
                         "callback_data": f"fb:{project.id}:hide_similar",
                     },
+                ],
+                [
                     {
                         "text": "Открыть заказ",
                         "url": project.url,

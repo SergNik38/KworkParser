@@ -78,11 +78,15 @@ class FakeNotifier:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.sent: list[int] = []
+        self.drafts: list[int] = []
 
     def send(self, project: Project, rule_result, ai_result) -> None:
         if self.fail:
             raise RuntimeError("send failed")
         self.sent.append(project.id)
+
+    def send_response_draft(self, project: Project, draft_text: str) -> None:
+        self.drafts.append(project.id)
 
 
 class ApplicationStateTests(unittest.TestCase):
@@ -129,6 +133,7 @@ class ApplicationStateTests(unittest.TestCase):
         self.assertEqual(row["notification_status"], "sent")
         self.assertIsNotNone(row["notified_at"])
         self.assertEqual(app.notifier.sent, [1001, 1001])
+        self.assertEqual(app.notifier.drafts, [])
 
     def test_telegram_error_keeps_project_retryable(self) -> None:
         app = self.make_app(dry_run=False)

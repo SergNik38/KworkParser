@@ -193,6 +193,7 @@ class TelegramFeedbackTests(unittest.TestCase):
             [
                 "fb:1001:interesting",
                 "fb:1001:miss",
+                "draft:1001:generate",
                 "fb:1001:hide_similar",
             ],
         )
@@ -296,7 +297,7 @@ class TelegramFeedbackTests(unittest.TestCase):
                     "callback_query": {
                         "id": "draft-callback",
                         "from": {"id": 123, "username": "user"},
-                        "data": "draft:1001:short",
+                        "data": "draft:1001:generate",
                     },
                 }
             ]
@@ -307,7 +308,7 @@ class TelegramFeedbackTests(unittest.TestCase):
         self.assertEqual(poll.next_offset, 31)
         self.assertEqual(len(poll.draft_actions), 1)
         self.assertEqual(poll.draft_actions[0].project_id, 1001)
-        self.assertEqual(poll.draft_actions[0].action, "short")
+        self.assertEqual(poll.draft_actions[0].action, "generate")
 
     def test_application_sync_saves_feedback_and_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
