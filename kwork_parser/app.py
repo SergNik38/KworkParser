@@ -74,7 +74,15 @@ class Application:
                 continue
 
             ai_result = candidate.ai_result
+            should_try_ai = ai_result is None and (
+                self.ai_scorer is not None
+                or not self._has_include_keywords_configured()
+                or self._has_include_keyword_match(project)
+            )
             if ai_result is None:
+                if not should_try_ai:
+                    self.storage.mark_ignored(project.id, "no include keyword match and AI disabled")
+                    continue
                 try:
                     ai_result = self._score_with_ai(project, rule_result)
                 except Exception as exc:
@@ -121,6 +129,13 @@ class Application:
         if not self.ai_scorer:
             return None
         return self.ai_scorer.score(project, rule_result)
+
+    def _has_include_keywords_configured(self) -> bool:
+        return bool(self.settings.include_keywords)
+
+    def _has_include_keyword_match(self, project: Project) -> bool:
+        text = project.searchable_text
+        return any(keyword in text for keyword in self.settings.include_keywords)
 
     def _sync_telegram_feedback(self) -> int:
         if not self.settings.telegram_enabled:

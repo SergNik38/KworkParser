@@ -52,7 +52,7 @@ def make_project(*, title: str, description: str, price: int = 50000) -> Project
 
 
 class RuleScorerTests(unittest.TestCase):
-    def test_missing_include_keyword_stays_below_rule_threshold_even_with_good_budget(self) -> None:
+    def test_missing_include_keyword_still_penalizes_but_can_reach_ai_gate(self) -> None:
         scorer = RuleScorer(make_settings(include_keywords=["python"]))
         project = make_project(
             title="Нужно оформить карточки товара",
@@ -61,9 +61,8 @@ class RuleScorerTests(unittest.TestCase):
 
         result = scorer.score(project)
 
-        self.assertLess(result.score, 40.0)
+        self.assertGreaterEqual(result.score, 40.0)
         self.assertIn("нет совпадений по include keywords", result.reasons)
-        self.assertIn("без include keywords не проходит rule-порог", result.reasons)
 
     def test_include_keyword_can_pass_rule_threshold(self) -> None:
         scorer = RuleScorer(make_settings(include_keywords=["python"]))
@@ -87,7 +86,7 @@ class RuleScorerTests(unittest.TestCase):
 
         self.assertGreaterEqual(result.score, 40.0)
 
-    def test_application_rescores_existing_pending_candidate_before_sending(self) -> None:
+    def test_application_skips_existing_candidate_without_include_keywords_when_ai_disabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             settings = make_settings(
                 include_keywords=["python"],
@@ -106,11 +105,39 @@ class RuleScorerTests(unittest.TestCase):
             processed = app.run_once()
 
             row = app.storage.connection.execute(
-                "SELECT notification_status, rule_score FROM projects WHERE id = 1001"
+                "SELECT notification_status, ignored_reason, rule_score FROM projects WHERE id = 1001"
             ).fetchone()
             self.assertEqual(processed, 0)
             self.assertEqual(row["notification_status"], "skipped")
-            self.assertLess(row["rule_score"], 40.0)
+            self.assertEqual(row["ignored_reason"], "no include keyword match and AI disabled")
+            self.assertGreaterEqual(row["rule_score"], 40.0)
+
+    def test_application_allows_ai_to_decide_candidate_without_include_keywords(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = make_settings(
+                include_keywords=["python"],
+                min_rule_score=40.0,
+            )
+            settings.database_path = Path(tmpdir) / "kwork_parser.db"
+            app = Application(settings)
+            project = make_project(
+                title="Интеграция сервиса с CRM",
+                description="Нужно связать формы заявок с CRM и настроить обмен данными",
+            )
+            app.storage.save_project(project, ScoreResult(44.0, "old broad score", []))
+            app.client = EmptyClient()
+            app.notifier = RecordingNotifier()
+            app.ai_scorer = PassingAiScorer()
+
+            processed = app.run_once()
+
+            row = app.storage.connection.execute(
+                "SELECT notification_status, ignored_reason, ai_score FROM projects WHERE id = 1001"
+            ).fetchone()
+            self.assertEqual(processed, 1)
+            self.assertEqual(row["notification_status"], "previewed")
+            self.assertIsNone(row["ignored_reason"])
+            self.assertEqual(row["ai_score"], 80.0)
 
 
 class EmptyClient:
@@ -121,6 +148,19 @@ class EmptyClient:
 class FailingNotifier:
     def send(self, project: Project, rule_result: ScoreResult, ai_result: ScoreResult | None) -> None:
         raise AssertionError("Notifier should not be called")
+
+
+class RecordingNotifier:
+    def __init__(self) -> None:
+        self.sent: list[int] = []
+
+    def send(self, project: Project, rule_result: ScoreResult, ai_result: ScoreResult | None) -> None:
+        self.sent.append(project.id)
+
+
+class PassingAiScorer:
+    def score(self, project: Project, rule_result: ScoreResult) -> ScoreResult:
+        return ScoreResult(80.0, "AI accepted", ["technical"])
 
 
 if __name__ == "__main__":

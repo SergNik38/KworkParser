@@ -204,10 +204,6 @@ class RuleScorer:
             score += 3
             reasons.append("можно приложить портфолио")
 
-        if missing_required_include:
-            score = min(score, self.settings.min_rule_score - 1)
-            reasons.append("без include keywords не проходит rule-порог")
-
         score = clamp_score(score)
         summary = "; ".join(reasons[:3]) if reasons else "Явных сигналов не найдено."
         return ScoreResult(score=score, summary=summary, reasons=reasons)
