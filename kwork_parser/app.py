@@ -58,7 +58,9 @@ class Application:
         include_previewed = not self.settings.dry_run
         for candidate in self.storage.get_notification_candidates(include_previewed=include_previewed):
             project = candidate.project
-            rule_result = candidate.rule_result
+            rule_result = self.rule_scorer.score(project)
+            rule_result = apply_hide_similar_penalty(project, rule_result, hidden_projects)
+            self.storage.update_rule_result(project.id, rule_result)
 
             if rule_result.score < self.settings.min_rule_score:
                 self.storage.mark_ignored(project.id, "rule score below threshold")

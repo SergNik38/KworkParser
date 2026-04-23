@@ -199,6 +199,25 @@ class Storage:
         )
         self.connection.commit()
 
+    def update_rule_result(self, project_id: int, rule_result: ScoreResult) -> None:
+        self.connection.execute(
+            """
+            UPDATE projects
+            SET scored_at = CURRENT_TIMESTAMP,
+                rule_score = ?,
+                rule_summary = ?,
+                rule_reasons_json = ?
+            WHERE id = ?
+            """,
+            (
+                rule_result.score,
+                rule_result.summary,
+                json.dumps(rule_result.reasons, ensure_ascii=False),
+                project_id,
+            ),
+        )
+        self.connection.commit()
+
     def get_notification_candidates(self, include_previewed: bool) -> list[NotificationCandidate]:
         statuses = ["pending", "error"]
         if include_previewed:

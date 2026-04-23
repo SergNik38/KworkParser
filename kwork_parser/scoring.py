@@ -134,7 +134,8 @@ class RuleScorer:
         if include_hits:
             score += min(25, 8 + 5 * len(include_hits))
             reasons.append("совпали ключевые слова: " + ", ".join(include_hits[:4]))
-        elif self.settings.include_keywords:
+        missing_required_include = bool(self.settings.include_keywords and not include_hits)
+        if missing_required_include:
             score -= 18
             reasons.append("нет совпадений по include keywords")
 
@@ -202,6 +203,10 @@ class RuleScorer:
         if project.has_portfolio_available:
             score += 3
             reasons.append("можно приложить портфолио")
+
+        if missing_required_include:
+            score = min(score, self.settings.min_rule_score - 1)
+            reasons.append("без include keywords не проходит rule-порог")
 
         score = clamp_score(score)
         summary = "; ".join(reasons[:3]) if reasons else "Явных сигналов не найдено."
