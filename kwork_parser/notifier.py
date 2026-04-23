@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import html
+import logging
 
 import requests
 
 from .config import Settings
 from .models import Project
 from .scoring import ScoreResult
+
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramNotifier:
@@ -17,9 +21,7 @@ class TelegramNotifier:
     def send(self, project: Project, rule_result: ScoreResult, ai_result: ScoreResult | None) -> None:
         message = self._format_message(project, rule_result, ai_result)
         if self.settings.dry_run:
-            print("\n" + "=" * 80)
-            print(message)
-            print("=" * 80 + "\n")
+            logger.info("Dry-run notification preview:\n%s\n%s\n%s", "=" * 80, message, "=" * 80)
             return
 
         if not self.settings.telegram_enabled:

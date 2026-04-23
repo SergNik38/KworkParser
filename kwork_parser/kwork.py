@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 import time
 
 import requests
 
 from .config import Settings
 from .models import Project
+
+
+logger = logging.getLogger(__name__)
 
 
 class KworkClient:
@@ -55,4 +59,16 @@ class KworkClient:
             raise RuntimeError(f"Kwork returned unsuccessful response: {data!r}")
 
         rows = (((data.get("data") or {}).get("pagination") or {}).get("data") or [])
-        return [Project.from_api(item) for item in rows]
+        return self._parse_projects(rows)
+
+    def _parse_projects(self, rows: object) -> list[Project]:
+        if not isinstance(rows, list):
+            return []
+
+        projects: list[Project] = []
+        for item in rows:
+            try:
+                projects.append(Project.from_api(item))
+            except ValueError as exc:
+                logger.warning("Skipped malformed Kwork project: %s", exc)
+        return projects

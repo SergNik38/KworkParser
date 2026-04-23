@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -128,6 +129,12 @@ class OpenRouterScorer:
         self.session = requests.Session()
 
     def score(self, project: Project, rule_result: ScoreResult) -> ScoreResult:
+        data = self._request_score(project, rule_result)
+        content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+        parsed = self._extract_json(content)
+        return self._score_from_parsed(parsed)
+
+    def _request_score(self, project: Project, rule_result: ScoreResult) -> dict:
         headers = {
             "Authorization": f"Bearer {self.settings.openrouter_api_key}",
             "Content-Type": "application/json",
@@ -158,53 +165,103 @@ class OpenRouterScorer:
             },
         }
 
-        response = self.session.post(
-            self.API_URL,
-            headers=headers,
-            json={
-                "model": self.settings.openrouter_model,
-                "temperature": 0.2,
-                "max_tokens": 300,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": load_system_prompt(),
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(prompt_payload, ensure_ascii=False),
-                    },
-                ],
-            },
-            timeout=self.settings.request_timeout_seconds,
-        )
-        response.raise_for_status()
-        data = response.json()
-        content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
-        parsed = self._extract_json(content)
-        score = clamp_score(float(parsed.get("score", 0)))
-        if parsed.get("is_relevant") is False:
+        request_body = {
+            "model": self.settings.openrouter_model,
+            "temperature": 0.2,
+            "max_tokens": 300,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": load_system_prompt(),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(prompt_payload, ensure_ascii=False),
+                },
+            ],
+        }
+
+        last_error: Exception | None = None
+        for attempt in range(1, self.settings.request_retries + 1):
+            try:
+                response = self.session.post(
+                    self.API_URL,
+                    headers=headers,
+                    json=request_body,
+                    timeout=self.settings.request_timeout_seconds,
+                )
+                response.raise_for_status()
+                data = response.json()
+                if not isinstance(data, dict):
+                    raise ValueError("OpenRouter response JSON must be an object")
+                return data
+            except (requests.RequestException, ValueError) as exc:
+                last_error = exc
+                if attempt >= self.settings.request_retries:
+                    raise
+                time.sleep(self.settings.retry_backoff_seconds)
+
+        raise RuntimeError(f"OpenRouter request failed: {last_error}")
+
+    def _extract_json(self, text: str) -> dict:
+        clean_text = self._strip_code_fence(text.strip())
+        decoder = json.JSONDecoder()
+
+        for match in re.finditer(r"\{", clean_text):
+            try:
+                parsed, _ = decoder.raw_decode(clean_text[match.start() :])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+
+        raise ValueError(f"Could not parse OpenRouter JSON response: {text!r}")
+
+    def _strip_code_fence(self, text: str) -> str:
+        if not text.startswith("```"):
+            return text
+        text = re.sub(r"^```(?:json)?", "", text).strip()
+        return re.sub(r"```$", "", text).strip()
+
+    def _score_from_parsed(self, parsed: dict) -> ScoreResult:
+        score = clamp_score(self._parse_score(parsed.get("score")))
+        is_relevant = self._parse_relevance(parsed.get("is_relevant"))
+        if is_relevant is False:
             score = min(score, 39.0)
         return ScoreResult(
             score=score,
             summary=self._build_summary(parsed),
-            reasons=[str(item).strip() for item in parsed.get("reasons", []) if str(item).strip()],
+            reasons=self._parse_reasons(parsed.get("reasons")),
         )
 
-    def _extract_json(self, text: str) -> dict:
-        text = text.strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?", "", text).strip()
-            text = re.sub(r"```$", "", text).strip()
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if not match:
-            raise ValueError(f"Could not parse OpenRouter JSON response: {text!r}")
-        return json.loads(match.group(0))
+    def _parse_score(self, value: object) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"OpenRouter score is missing or invalid: {value!r}") from None
+
+    def _parse_relevance(self, value: object) -> bool | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "yes", "1"}:
+                return True
+            if lowered in {"false", "no", "0"}:
+                return False
+        return bool(value)
+
+    def _parse_reasons(self, value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
 
     def _build_summary(self, parsed: dict) -> str:
         summary = str(parsed.get("summary", "AI summary is empty")).strip()
         category = str(parsed.get("category", "")).strip()
-        is_relevant = parsed.get("is_relevant")
+        is_relevant = self._parse_relevance(parsed.get("is_relevant"))
 
         parts = []
         if is_relevant is not None:
