@@ -36,6 +36,13 @@ class HealthSnapshot:
     latest_error: str
 
 
+@dataclass(slots=True)
+class ResponseDraft:
+    project_id: int
+    text: str
+    variant: str
+
+
 class Storage:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -86,6 +93,17 @@ class Storage:
             CREATE TABLE IF NOT EXISTS app_state (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS response_drafts (
+                project_id INTEGER PRIMARY KEY,
+                text TEXT NOT NULL,
+                variant TEXT NOT NULL DEFAULT 'default',
+                status TEXT NOT NULL DEFAULT 'draft',
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -237,6 +255,15 @@ class Storage:
         ).fetchall()
         return [self._candidate_from_row(row) for row in rows]
 
+    def get_project_candidate(self, project_id: int) -> NotificationCandidate | None:
+        row = self.connection.execute(
+            "SELECT * FROM projects WHERE id = ?",
+            (project_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return self._candidate_from_row(row)
+
     def get_hide_similar_projects(self, limit: int = 100) -> list[Project]:
         rows = self.connection.execute(
             """
@@ -310,6 +337,50 @@ class Storage:
             error_count=status_counts.get("error", 0),
             latest_error=(error_row["notification_error"] if error_row else "") or "",
         )
+
+    def save_response_draft(self, draft: ResponseDraft) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO response_drafts (project_id, text, variant, status, updated_at)
+            VALUES (?, ?, ?, 'draft', CURRENT_TIMESTAMP)
+            ON CONFLICT(project_id) DO UPDATE SET
+                text = excluded.text,
+                variant = excluded.variant,
+                status = 'draft',
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (draft.project_id, draft.text, draft.variant),
+        )
+        self.connection.commit()
+
+    def get_response_draft(self, project_id: int) -> ResponseDraft | None:
+        row = self.connection.execute(
+            """
+            SELECT project_id, text, variant
+            FROM response_drafts
+            WHERE project_id = ?
+            """,
+            (project_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return ResponseDraft(
+            project_id=int(row["project_id"]),
+            text=row["text"],
+            variant=row["variant"],
+        )
+
+    def mark_response_draft_sent_manually(self, project_id: int) -> None:
+        self.connection.execute(
+            """
+            UPDATE response_drafts
+            SET status = 'sent_manually',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE project_id = ?
+            """,
+            (project_id,),
+        )
+        self.connection.commit()
 
     def save_ai_result(self, project_id: int, ai_result: ScoreResult) -> None:
         self.connection.execute(

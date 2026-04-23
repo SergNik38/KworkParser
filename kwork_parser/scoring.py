@@ -273,6 +273,9 @@ class OpenRouterScorer:
             ],
         }
 
+        return self._post_chat_completion(headers, request_body)
+
+    def _post_chat_completion(self, headers: dict, request_body: dict) -> dict:
         last_error: Exception | None = None
         for attempt in range(1, self.settings.request_retries + 1):
             try:
@@ -365,7 +368,90 @@ class OpenRouterScorer:
         return " | ".join(parts) if parts else "AI summary is empty"
 
 
+class OpenRouterResponseDraftGenerator(OpenRouterScorer):
+    def generate(
+        self,
+        project: Project,
+        rule_result: ScoreResult,
+        ai_result: ScoreResult | None,
+        variant: str = "default",
+    ) -> str:
+        headers = {
+            "Authorization": f"Bearer {self.settings.openrouter_api_key}",
+            "Content-Type": "application/json",
+        }
+        if self.settings.openrouter_site_url:
+            headers["HTTP-Referer"] = self.settings.openrouter_site_url
+        if self.settings.openrouter_site_name:
+            headers["X-Title"] = self.settings.openrouter_site_name
+
+        prompt_payload = {
+            "profile": self.settings.ai_profile_brief,
+            "extra_instructions": self.settings.ai_extra_instructions,
+            "variant": variant,
+            "rule_score": rule_result.score,
+            "rule_summary": rule_result.summary,
+            "rule_reasons": rule_result.reasons,
+            "ai_score": ai_result.score if ai_result else None,
+            "ai_summary": ai_result.summary if ai_result else None,
+            "ai_reasons": ai_result.reasons if ai_result else [],
+            "project": {
+                "id": project.id,
+                "title": project.title,
+                "description": project.description,
+                "url": project.url,
+                "category_id": project.category_id,
+                "budget_rub": project.budget_rub,
+                "possible_budget_rub": project.possible_budget_rub,
+                "max_days": project.max_days,
+                "username": project.username,
+                "user_hired_percent": project.user_hired_percent,
+                "kwork_count": project.kwork_count,
+                "views": project.views,
+            },
+        }
+        if variant == "short":
+            prompt_payload["extra_instructions"] += "\nСделай отклик заметно короче: 3-5 предложений."
+        elif variant == "questions":
+            prompt_payload["extra_instructions"] += "\nДобавь отдельный короткий блок уточняющих вопросов."
+
+        data = self._post_chat_completion(
+            headers,
+            {
+                "model": self.settings.openrouter_model,
+                "temperature": 0.35,
+                "max_tokens": 450,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": load_response_draft_prompt(),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(prompt_payload, ensure_ascii=False),
+                    },
+                ],
+            },
+        )
+        content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+        if not content:
+            raise ValueError("OpenRouter response draft is empty")
+        return self._clean_draft_text(content)
+
+    def _clean_draft_text(self, text: str) -> str:
+        text = text.strip()
+        if text.startswith("```"):
+            text = self._strip_code_fence(text)
+        return text.strip()
+
+
 @lru_cache(maxsize=1)
 def load_system_prompt() -> str:
     prompt_path = Path(__file__).with_name("prompts") / "development_filter_system_prompt.txt"
+    return prompt_path.read_text(encoding="utf-8").strip()
+
+
+@lru_cache(maxsize=1)
+def load_response_draft_prompt() -> str:
+    prompt_path = Path(__file__).with_name("prompts") / "response_draft_system_prompt.txt"
     return prompt_path.read_text(encoding="utf-8").strip()

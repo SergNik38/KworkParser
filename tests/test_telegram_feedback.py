@@ -9,13 +9,14 @@ from kwork_parser.app import Application
 from kwork_parser.config import Settings
 from kwork_parser.models import Project
 from kwork_parser.notifier import (
+    TelegramDraftAction,
     TelegramFeedbackPoll,
     TelegramFeedbackUpdate,
     TelegramHealthCommand,
     TelegramNotifier,
 )
 from kwork_parser.scoring import ScoreResult
-from kwork_parser.storage import ProjectFeedback, Storage
+from kwork_parser.storage import ProjectFeedback, ResponseDraft, Storage
 
 
 def make_settings(database_path: Path | None = None, telegram_chat_id: str = "chat") -> Settings:
@@ -144,6 +145,27 @@ class FakeHealthNotifier:
         self.health_messages.append((command, text))
 
 
+class FakeDraftGenerator:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, str]] = []
+
+    def generate(self, project: Project, rule_result: ScoreResult, ai_result: ScoreResult | None, variant: str) -> str:
+        self.calls.append((project.id, variant))
+        return f"Черновик {variant}"
+
+
+class FakeDraftNotifier:
+    def __init__(self) -> None:
+        self.drafts: list[tuple[int, str]] = []
+        self.answers: list[tuple[str, str]] = []
+
+    def send_response_draft(self, project: Project, draft_text: str) -> None:
+        self.drafts.append((project.id, draft_text))
+
+    def answer_feedback(self, callback_query_id: str, feedback: str) -> None:
+        self.answers.append((callback_query_id, feedback))
+
+
 class TelegramFeedbackTests(unittest.TestCase):
     def test_message_contains_description_reasons_and_buttons(self) -> None:
         notifier = TelegramNotifier(make_settings())
@@ -172,6 +194,31 @@ class TelegramFeedbackTests(unittest.TestCase):
                 "fb:1001:interesting",
                 "fb:1001:miss",
                 "fb:1001:hide_similar",
+            ],
+        )
+
+    def test_draft_message_contains_text_and_buttons(self) -> None:
+        notifier = TelegramNotifier(make_settings())
+        project = make_project()
+
+        message = notifier._format_response_draft(project, "Готов помочь с задачей.")
+        markup = notifier._build_draft_reply_markup(project)
+
+        self.assertIn("Черновик отклика", message)
+        self.assertIn("Готов помочь", message)
+        callback_data = [
+            button.get("callback_data")
+            for row in markup["inline_keyboard"]
+            for button in row
+            if "callback_data" in button
+        ]
+        self.assertEqual(
+            callback_data,
+            [
+                "draft:1001:regenerate",
+                "draft:1001:short",
+                "draft:1001:questions",
+                "draft:1001:sent",
             ],
         )
 
@@ -240,6 +287,28 @@ class TelegramFeedbackTests(unittest.TestCase):
         self.assertEqual(poll.health_commands[0].message_id, 5)
         self.assertEqual(poll.health_commands[0].telegram_user_id, 123)
 
+    def test_fetch_feedback_parses_draft_action(self) -> None:
+        notifier = TelegramNotifier(make_settings())
+        notifier.session = FakeTelegramSession(
+            [
+                {
+                    "update_id": 30,
+                    "callback_query": {
+                        "id": "draft-callback",
+                        "from": {"id": 123, "username": "user"},
+                        "data": "draft:1001:short",
+                    },
+                }
+            ]
+        )
+
+        poll = notifier.fetch_feedback(offset=None)
+
+        self.assertEqual(poll.next_offset, 31)
+        self.assertEqual(len(poll.draft_actions), 1)
+        self.assertEqual(poll.draft_actions[0].project_id, 1001)
+        self.assertEqual(poll.draft_actions[0].action, "short")
+
     def test_application_sync_saves_feedback_and_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app = Application(make_settings(Path(tmpdir) / "kwork_parser.db"))
@@ -269,6 +338,54 @@ class TelegramFeedbackTests(unittest.TestCase):
             self.assertEqual(len(fake_notifier.health_messages), 1)
             self.assertIn("Kwork Parser health", fake_notifier.health_messages[0][1])
             self.assertIn("Проекты", fake_notifier.health_messages[0][1])
+
+    def test_application_generates_and_saves_response_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = Application(make_settings(Path(tmpdir) / "kwork_parser.db"))
+            app.response_draft_generator = FakeDraftGenerator()
+            app.notifier = FakeDraftNotifier()
+            project = make_project()
+            rule_result = ScoreResult(70, "rule", [])
+
+            generated = app._send_response_draft(project, rule_result, None, variant="short")
+            draft = app.storage.get_response_draft(project.id)
+
+            self.assertTrue(generated)
+            self.assertEqual(draft.text, "Черновик short")
+            self.assertEqual(draft.variant, "short")
+            self.assertEqual(app.notifier.drafts, [(1001, "Черновик short")])
+
+    def test_application_marks_response_draft_sent_manually(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = Application(make_settings(Path(tmpdir) / "kwork_parser.db"))
+            app.notifier = FakeDraftNotifier()
+            project = make_project()
+            app.storage.save_response_draft(
+                ResponseDraft(
+                    project_id=project.id,
+                    text="Черновик",
+                    variant="default",
+                )
+            )
+
+            app._handle_draft_action(
+                TelegramDraftAction(
+                    project_id=project.id,
+                    action="sent",
+                    update_id=1,
+                    callback_query_id="draft-callback",
+                    telegram_user_id=123,
+                    telegram_username="user",
+                    payload={},
+                )
+            )
+
+            status = app.storage.connection.execute(
+                "SELECT status FROM response_drafts WHERE project_id = ?",
+                (project.id,),
+            ).fetchone()["status"]
+            self.assertEqual(status, "sent_manually")
+            self.assertEqual(app.notifier.answers, [("draft-callback", "Отклик отмечен как отправленный")])
 
     def test_storage_keeps_feedback_per_telegram_user(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

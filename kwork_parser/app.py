@@ -8,9 +8,15 @@ from datetime import datetime
 from .config import Settings
 from .kwork import KworkClient
 from .models import Project
-from .notifier import TelegramHealthCommand, TelegramNotifier
-from .scoring import OpenRouterScorer, RuleScorer, ScoreResult, apply_hide_similar_penalty
-from .storage import HealthSnapshot, ProjectFeedback, Storage
+from .notifier import TelegramDraftAction, TelegramHealthCommand, TelegramNotifier
+from .scoring import (
+    OpenRouterResponseDraftGenerator,
+    OpenRouterScorer,
+    RuleScorer,
+    ScoreResult,
+    apply_hide_similar_penalty,
+)
+from .storage import HealthSnapshot, ProjectFeedback, ResponseDraft, Storage
 
 
 logger = logging.getLogger(__name__)
@@ -23,6 +29,7 @@ class Application:
         self.storage = Storage(settings.database_path)
         self.rule_scorer = RuleScorer(settings)
         self.ai_scorer = OpenRouterScorer(settings) if settings.ai_enabled else None
+        self.response_draft_generator = OpenRouterResponseDraftGenerator(settings) if settings.ai_enabled else None
         self.notifier = TelegramNotifier(settings)
 
     def run_once(self) -> int:
@@ -83,6 +90,7 @@ class Application:
 
             try:
                 self.notifier.send(project, rule_result, ai_result)
+                self._send_response_draft(project, rule_result, ai_result, variant="default")
             except Exception as exc:
                 self.storage.mark_error(project.id, f"Telegram notification failed: {exc}")
                 logger.warning(
@@ -149,6 +157,9 @@ class Application:
             except Exception:
                 logger.warning("Telegram health response failed", exc_info=True)
 
+        for action in poll.draft_actions:
+            self._handle_draft_action(action)
+
         if poll.next_offset is not None:
             self.storage.set_telegram_update_offset(poll.next_offset)
 
@@ -157,6 +168,53 @@ class Application:
         if poll.health_commands:
             logger.info("Answered %s Telegram health commands", len(poll.health_commands))
         return len(poll.actions)
+
+    def _send_response_draft(
+        self,
+        project: Project,
+        rule_result: ScoreResult,
+        ai_result: ScoreResult | None,
+        variant: str,
+    ) -> bool:
+        if not self.response_draft_generator:
+            return False
+
+        try:
+            draft_text = self.response_draft_generator.generate(project, rule_result, ai_result, variant=variant)
+            self.storage.save_response_draft(
+                ResponseDraft(project_id=project.id, text=draft_text, variant=variant)
+            )
+            self.notifier.send_response_draft(project, draft_text)
+            return True
+        except Exception:
+            logger.warning("Response draft generation failed for project %s", project.id, exc_info=True)
+            return False
+
+    def _handle_draft_action(self, action: TelegramDraftAction) -> None:
+        try:
+            if action.action == "sent":
+                self.storage.mark_response_draft_sent_manually(action.project_id)
+                self.notifier.answer_feedback(action.callback_query_id, "Отклик отмечен как отправленный")
+                return
+
+            candidate = self.storage.get_project_candidate(action.project_id)
+            if not candidate:
+                self.notifier.answer_feedback(action.callback_query_id, "Проект не найден в базе")
+                return
+
+            variant = "default" if action.action == "regenerate" else action.action
+            generated = self._send_response_draft(
+                candidate.project,
+                candidate.rule_result,
+                candidate.ai_result,
+                variant=variant,
+            )
+            self.notifier.answer_feedback(
+                action.callback_query_id,
+                "Черновик обновлен" if generated else "Не удалось обновить черновик",
+            )
+        except Exception:
+            logger.warning("Draft action handling failed for project %s", action.project_id, exc_info=True)
 
     def _format_health_message(self) -> str:
         snapshot = self.storage.get_health_snapshot()

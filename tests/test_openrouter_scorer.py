@@ -8,7 +8,7 @@ import requests
 
 from kwork_parser.config import Settings
 from kwork_parser.models import Project
-from kwork_parser.scoring import OpenRouterScorer, ScoreResult
+from kwork_parser.scoring import OpenRouterResponseDraftGenerator, OpenRouterScorer, ScoreResult
 
 
 def make_settings() -> Settings:
@@ -138,6 +138,55 @@ class OpenRouterScorerTests(unittest.TestCase):
 
         self.assertEqual(result.score, 75.0)
         self.assertEqual(scorer.session.calls, 2)
+
+
+class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
+    def test_generate_returns_plain_draft_text(self) -> None:
+        generator = OpenRouterResponseDraftGenerator(make_settings())
+        generator.session = FakeSession(
+            [
+                FakeResponse(
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": "Здравствуйте! Готов помочь с API-интеграцией."
+                                }
+                            }
+                        ]
+                    }
+                )
+            ]
+        )
+
+        result = generator.generate(
+            make_project(),
+            ScoreResult(70, "rule", ["api"]),
+            ScoreResult(80, "ai", ["integration"]),
+        )
+
+        self.assertEqual(result, "Здравствуйте! Готов помочь с API-интеграцией.")
+
+    def test_generate_rejects_empty_draft(self) -> None:
+        generator = OpenRouterResponseDraftGenerator(make_settings())
+        generator.session = FakeSession(
+            [
+                FakeResponse(
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": " "
+                                }
+                            }
+                        ]
+                    }
+                )
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "draft is empty"):
+            generator.generate(make_project(), ScoreResult(70, "rule", []), None)
 
 
 if __name__ == "__main__":
