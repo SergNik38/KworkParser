@@ -7,7 +7,7 @@ from .config import Settings
 from .kwork import KworkClient
 from .models import Project
 from .notifier import TelegramNotifier
-from .scoring import OpenRouterScorer, RuleScorer, ScoreResult
+from .scoring import OpenRouterScorer, RuleScorer, ScoreResult, apply_hide_similar_penalty
 from .storage import ProjectFeedback, Storage
 
 
@@ -28,6 +28,7 @@ class Application:
 
         bootstrap_mode = self.settings.skip_existing_on_first_run and self.storage.is_empty()
         new_project_ids: list[int] = []
+        hidden_projects = self.storage.get_hide_similar_projects()
 
         for page in range(1, self.settings.max_pages + 1):
             projects = self.client.fetch_projects(page=page)
@@ -38,6 +39,7 @@ class Application:
                 if self.storage.is_known(project.id):
                     continue
                 rule_result = self.rule_scorer.score(project)
+                rule_result = apply_hide_similar_penalty(project, rule_result, hidden_projects)
                 self.storage.save_project(project, rule_result)
                 new_project_ids.append(project.id)
 

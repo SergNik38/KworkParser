@@ -24,6 +24,93 @@ class ScoreResult:
     reasons: list[str]
 
 
+TOKEN_RE = re.compile(r"[a-zа-яё0-9]{4,}", flags=re.IGNORECASE)
+STOP_WORDS = {
+    "with",
+    "from",
+    "this",
+    "that",
+    "для",
+    "или",
+    "как",
+    "что",
+    "это",
+    "надо",
+    "нужно",
+    "сделать",
+    "заказ",
+    "проект",
+    "работа",
+    "есть",
+    "будет",
+    "можно",
+    "требуется",
+}
+
+
+def apply_hide_similar_penalty(
+    project: Project,
+    rule_result: ScoreResult,
+    hidden_projects: list[Project],
+    penalty: float = 25.0,
+) -> ScoreResult:
+    hidden_project_id = find_similar_hidden_project(project, hidden_projects)
+    if hidden_project_id is None:
+        return rule_result
+
+    reason = f"похож на скрытый ранее заказ #{hidden_project_id}"
+    reasons = [reason, *rule_result.reasons]
+    score = clamp_score(rule_result.score - penalty)
+    summary = "; ".join(reasons[:3])
+    return ScoreResult(score=score, summary=summary, reasons=reasons)
+
+
+def find_similar_hidden_project(project: Project, hidden_projects: list[Project]) -> int | None:
+    project_tokens = _tokens(project.searchable_text)
+    project_title_tokens = _tokens(project.title)
+    if not project_tokens:
+        return None
+
+    for hidden_project in hidden_projects:
+        if hidden_project.id == project.id:
+            continue
+
+        hidden_tokens = _tokens(hidden_project.searchable_text)
+        hidden_title_tokens = _tokens(hidden_project.title)
+        if not hidden_tokens:
+            continue
+
+        common_tokens = project_tokens & hidden_tokens
+        common_title_tokens = project_title_tokens & hidden_title_tokens
+        category_matches = (
+            project.category_id is not None
+            and hidden_project.category_id is not None
+            and project.category_id == hidden_project.category_id
+        )
+        title_similarity = _jaccard(project_title_tokens, hidden_title_tokens)
+
+        if category_matches and (len(common_title_tokens) >= 2 or len(common_tokens) >= 4):
+            return hidden_project.id
+        if title_similarity >= 0.5 and len(common_title_tokens) >= 2:
+            return hidden_project.id
+
+    return None
+
+
+def _tokens(text: str) -> set[str]:
+    return {
+        token.lower()
+        for token in TOKEN_RE.findall(text)
+        if token.lower() not in STOP_WORDS
+    }
+
+
+def _jaccard(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
 class RuleScorer:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings

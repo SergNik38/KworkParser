@@ -207,6 +207,28 @@ class Storage:
         ).fetchall()
         return [self._candidate_from_row(row) for row in rows]
 
+    def get_hide_similar_projects(self, limit: int = 100) -> list[Project]:
+        rows = self.connection.execute(
+            """
+            SELECT p.payload_json
+            FROM projects p
+            JOIN project_feedback f ON f.project_id = p.id
+            WHERE f.feedback = 'hide_similar'
+            GROUP BY p.id
+            ORDER BY MAX(f.updated_at) DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+        projects: list[Project] = []
+        for row in rows:
+            try:
+                projects.append(Project.from_api(json.loads(row["payload_json"])))
+            except (ValueError, json.JSONDecodeError):
+                continue
+        return projects
+
     def save_ai_result(self, project_id: int, ai_result: ScoreResult) -> None:
         self.connection.execute(
             """
