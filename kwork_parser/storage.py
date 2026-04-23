@@ -25,6 +25,17 @@ class ProjectFeedback:
     payload: dict
 
 
+@dataclass(slots=True)
+class HealthSnapshot:
+    total_projects: int
+    status_counts: dict[str, int]
+    feedback_counts: dict[str, int]
+    last_seen_at: str
+    last_notified_at: str
+    error_count: int
+    latest_error: str
+
+
 class Storage:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -228,6 +239,58 @@ class Storage:
             except (ValueError, json.JSONDecodeError):
                 continue
         return projects
+
+    def get_health_snapshot(self) -> HealthSnapshot:
+        total_row = self.connection.execute("SELECT COUNT(*) AS count FROM projects").fetchone()
+        status_rows = self.connection.execute(
+            """
+            SELECT notification_status, COUNT(*) AS count
+            FROM projects
+            GROUP BY notification_status
+            """
+        ).fetchall()
+        feedback_rows = self.connection.execute(
+            """
+            SELECT feedback, COUNT(*) AS count
+            FROM project_feedback
+            GROUP BY feedback
+            """
+        ).fetchall()
+        dates_row = self.connection.execute(
+            """
+            SELECT
+                MAX(seen_at) AS last_seen_at,
+                MAX(notified_at) AS last_notified_at
+            FROM projects
+            """
+        ).fetchone()
+        error_row = self.connection.execute(
+            """
+            SELECT notification_error
+            FROM projects
+            WHERE notification_error IS NOT NULL
+            ORDER BY seen_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+        status_counts = {
+            row["notification_status"] or "unknown": int(row["count"])
+            for row in status_rows
+        }
+        feedback_counts = {
+            row["feedback"] or "unknown": int(row["count"])
+            for row in feedback_rows
+        }
+        return HealthSnapshot(
+            total_projects=int(total_row["count"] or 0),
+            status_counts=status_counts,
+            feedback_counts=feedback_counts,
+            last_seen_at=dates_row["last_seen_at"] or "n/a",
+            last_notified_at=dates_row["last_notified_at"] or "n/a",
+            error_count=status_counts.get("error", 0),
+            latest_error=(error_row["notification_error"] if error_row else "") or "",
+        )
 
     def save_ai_result(self, project_id: int, ai_result: ScoreResult) -> None:
         self.connection.execute(

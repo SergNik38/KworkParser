@@ -8,12 +8,17 @@ from pathlib import Path
 from kwork_parser.app import Application
 from kwork_parser.config import Settings
 from kwork_parser.models import Project
-from kwork_parser.notifier import TelegramFeedbackPoll, TelegramFeedbackUpdate, TelegramNotifier
+from kwork_parser.notifier import (
+    TelegramFeedbackPoll,
+    TelegramFeedbackUpdate,
+    TelegramHealthCommand,
+    TelegramNotifier,
+)
 from kwork_parser.scoring import ScoreResult
 from kwork_parser.storage import ProjectFeedback, Storage
 
 
-def make_settings(database_path: Path | None = None) -> Settings:
+def make_settings(database_path: Path | None = None, telegram_chat_id: str = "chat") -> Settings:
     return Settings(
         poll_interval_seconds=45,
         request_timeout_seconds=20,
@@ -32,7 +37,7 @@ def make_settings(database_path: Path | None = None) -> Settings:
         exclude_keywords=[],
         dry_run=False,
         telegram_bot_token="token",
-        telegram_chat_id="chat",
+        telegram_chat_id=telegram_chat_id,
         openrouter_api_key=None,
         openrouter_model=None,
         openrouter_site_url=None,
@@ -114,6 +119,31 @@ class FakeFeedbackNotifier:
         self.answered.append((callback_query_id, feedback))
 
 
+class FakeHealthNotifier:
+    def __init__(self) -> None:
+        self.health_messages: list[tuple[TelegramHealthCommand, str]] = []
+
+    def fetch_feedback(self, offset: int | None) -> TelegramFeedbackPoll:
+        self.offset = offset
+        return TelegramFeedbackPoll(
+            actions=[],
+            next_offset=100,
+            health_commands=[
+                TelegramHealthCommand(
+                    chat_id=-100123,
+                    update_id=99,
+                    message_id=7,
+                    telegram_user_id=123,
+                    telegram_username="user",
+                    payload={"update_id": 99},
+                )
+            ],
+        )
+
+    def send_health(self, command: TelegramHealthCommand, text: str) -> None:
+        self.health_messages.append((command, text))
+
+
 class TelegramFeedbackTests(unittest.TestCase):
     def test_message_contains_description_reasons_and_buttons(self) -> None:
         notifier = TelegramNotifier(make_settings())
@@ -177,6 +207,39 @@ class TelegramFeedbackTests(unittest.TestCase):
         self.assertEqual(poll.actions[0].telegram_user_id, 123)
         self.assertEqual(poll.actions[0].telegram_username, "user")
 
+    def test_fetch_feedback_parses_health_command_for_configured_chat(self) -> None:
+        notifier = TelegramNotifier(make_settings(telegram_chat_id="-100123"))
+        notifier.session = FakeTelegramSession(
+            [
+                {
+                    "update_id": 20,
+                    "message": {
+                        "message_id": 5,
+                        "chat": {"id": -100123},
+                        "from": {"id": 123, "username": "user"},
+                        "text": "/health@KworkParserBot",
+                    },
+                },
+                {
+                    "update_id": 21,
+                    "message": {
+                        "message_id": 6,
+                        "chat": {"id": -999},
+                        "from": {"id": 456},
+                        "text": "/health",
+                    },
+                },
+            ]
+        )
+
+        poll = notifier.fetch_feedback(offset=10)
+
+        self.assertEqual(poll.next_offset, 22)
+        self.assertEqual(len(poll.health_commands), 1)
+        self.assertEqual(poll.health_commands[0].chat_id, -100123)
+        self.assertEqual(poll.health_commands[0].message_id, 5)
+        self.assertEqual(poll.health_commands[0].telegram_user_id, 123)
+
     def test_application_sync_saves_feedback_and_offset(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             app = Application(make_settings(Path(tmpdir) / "kwork_parser.db"))
@@ -192,6 +255,20 @@ class TelegramFeedbackTests(unittest.TestCase):
             self.assertEqual(feedback.telegram_user_id, 123)
             self.assertEqual(app.storage.get_telegram_update_offset(), 43)
             self.assertEqual(fake_notifier.answered, [("callback-1", "interesting")])
+
+    def test_application_sync_answers_health_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = Application(make_settings(Path(tmpdir) / "kwork_parser.db", telegram_chat_id="-100123"))
+            fake_notifier = FakeHealthNotifier()
+            app.notifier = fake_notifier
+
+            saved = app._sync_telegram_feedback()
+
+            self.assertEqual(saved, 0)
+            self.assertEqual(app.storage.get_telegram_update_offset(), 100)
+            self.assertEqual(len(fake_notifier.health_messages), 1)
+            self.assertIn("Kwork Parser health", fake_notifier.health_messages[0][1])
+            self.assertIn("Проекты", fake_notifier.health_messages[0][1])
 
     def test_storage_keeps_feedback_per_telegram_user(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

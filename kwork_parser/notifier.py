@@ -3,7 +3,7 @@ from __future__ import annotations
 import html
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import requests
 
@@ -34,9 +34,20 @@ class TelegramFeedbackUpdate:
 
 
 @dataclass(slots=True)
+class TelegramHealthCommand:
+    chat_id: int
+    update_id: int
+    message_id: int | None
+    telegram_user_id: int | None
+    telegram_username: str
+    payload: dict
+
+
+@dataclass(slots=True)
 class TelegramFeedbackPoll:
     actions: list[TelegramFeedbackUpdate]
     next_offset: int | None
+    health_commands: list[TelegramHealthCommand] = field(default_factory=list)
 
 
 class TelegramNotifier:
@@ -75,7 +86,7 @@ class TelegramNotifier:
 
         params: dict[str, object] = {
             "timeout": 0,
-            "allowed_updates": json.dumps(["callback_query"]),
+            "allowed_updates": json.dumps(["callback_query", "message"]),
         }
         if offset is not None:
             params["offset"] = offset
@@ -96,6 +107,7 @@ class TelegramNotifier:
 
         next_offset = offset
         actions: list[TelegramFeedbackUpdate] = []
+        health_commands: list[TelegramHealthCommand] = []
         for update in updates:
             if not isinstance(update, dict):
                 continue
@@ -106,8 +118,17 @@ class TelegramNotifier:
             action = self._parse_feedback_update(update, update_id)
             if action:
                 actions.append(action)
+                continue
 
-        return TelegramFeedbackPoll(actions=actions, next_offset=next_offset)
+            health_command = self._parse_health_command(update, update_id)
+            if health_command:
+                health_commands.append(health_command)
+
+        return TelegramFeedbackPoll(
+            actions=actions,
+            next_offset=next_offset,
+            health_commands=health_commands,
+        )
 
     def answer_feedback(self, callback_query_id: str, feedback: str) -> None:
         if not self.settings.telegram_enabled or not callback_query_id:
@@ -127,6 +148,29 @@ class TelegramNotifier:
         payload = response.json()
         if not payload.get("ok"):
             raise RuntimeError(f"Telegram answerCallbackQuery API error: {payload!r}")
+
+    def send_health(self, command: TelegramHealthCommand, text: str) -> None:
+        if not self.settings.telegram_enabled:
+            return
+
+        message: dict[str, object] = {
+            "chat_id": command.chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if command.message_id is not None:
+            message["reply_to_message_id"] = command.message_id
+
+        response = self.session.post(
+            f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage",
+            json=message,
+            timeout=self.settings.request_timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("ok"):
+            raise RuntimeError(f"Telegram health response API error: {payload!r}")
 
     def _format_message(self, project: Project, rule_result: ScoreResult, ai_result: ScoreResult | None) -> str:
         budget = project.budget_rub or project.possible_budget_rub
@@ -224,6 +268,47 @@ class TelegramNotifier:
             telegram_username=str(user.get("username") or "").strip(),
             payload=update,
         )
+
+    def _parse_health_command(
+        self,
+        update: dict,
+        update_id: int | None,
+    ) -> TelegramHealthCommand | None:
+        message = update.get("message")
+        if not isinstance(message, dict) or update_id is None:
+            return None
+
+        text = message.get("text")
+        if not isinstance(text, str) or not self._is_health_command(text):
+            return None
+
+        chat = message.get("chat") or {}
+        if not isinstance(chat, dict):
+            return None
+
+        chat_id = self._parse_int(chat.get("id"))
+        if chat_id is None or not self._chat_matches(chat_id):
+            return None
+
+        user = message.get("from") or {}
+        if not isinstance(user, dict):
+            user = {}
+
+        return TelegramHealthCommand(
+            chat_id=chat_id,
+            update_id=update_id,
+            message_id=self._parse_int(message.get("message_id")),
+            telegram_user_id=self._parse_int(user.get("id")),
+            telegram_username=str(user.get("username") or "").strip(),
+            payload=update,
+        )
+
+    def _is_health_command(self, text: str) -> bool:
+        command = text.strip().split(maxsplit=1)[0].lower()
+        return command == "/health" or command.startswith("/health@")
+
+    def _chat_matches(self, chat_id: int) -> bool:
+        return str(chat_id) == str(self.settings.telegram_chat_id)
 
     def _format_ai_reasons(self, ai_result: ScoreResult) -> str:
         reasons = self._format_reasons(ai_result.reasons)

@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import html
 import logging
 import time
+from datetime import datetime
 
 from .config import Settings
 from .kwork import KworkClient
 from .models import Project
-from .notifier import TelegramNotifier
+from .notifier import TelegramHealthCommand, TelegramNotifier
 from .scoring import OpenRouterScorer, RuleScorer, ScoreResult, apply_hide_similar_penalty
-from .storage import ProjectFeedback, Storage
+from .storage import HealthSnapshot, ProjectFeedback, Storage
 
 
 logger = logging.getLogger(__name__)
@@ -139,9 +141,46 @@ class Application:
                     exc_info=True,
                 )
 
+        for command in poll.health_commands:
+            try:
+                self.notifier.send_health(command, self._format_health_message())
+            except Exception:
+                logger.warning("Telegram health response failed", exc_info=True)
+
         if poll.next_offset is not None:
             self.storage.set_telegram_update_offset(poll.next_offset)
 
         if poll.actions:
             logger.info("Saved %s Telegram feedback actions", len(poll.actions))
+        if poll.health_commands:
+            logger.info("Answered %s Telegram health commands", len(poll.health_commands))
         return len(poll.actions)
+
+    def _format_health_message(self) -> str:
+        snapshot = self.storage.get_health_snapshot()
+        status = "OK" if snapshot.error_count == 0 else "OK, есть ошибки"
+        return (
+            f"<b>Kwork Parser health</b>\n"
+            f"<b>Статус:</b> {status}\n"
+            f"<b>Время:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"<b>База:</b> {html.escape(str(self.settings.database_path))}\n"
+            f"<b>Проекты:</b> {snapshot.total_projects}\n"
+            f"<b>Статусы:</b> {self._format_counts(snapshot.status_counts)}\n"
+            f"<b>Feedback:</b> {self._format_counts(snapshot.feedback_counts)}\n"
+            f"<b>Последний seen:</b> {snapshot.last_seen_at}\n"
+            f"<b>Последний sent:</b> {snapshot.last_notified_at}"
+            f"{self._format_health_error(snapshot)}"
+        )
+
+    def _format_counts(self, counts: dict[str, int]) -> str:
+        if not counts:
+            return "нет данных"
+        return ", ".join(f"{key}: {value}" for key, value in sorted(counts.items()))
+
+    def _format_health_error(self, snapshot: HealthSnapshot) -> str:
+        if not snapshot.latest_error:
+            return ""
+        error = snapshot.latest_error
+        if len(error) > 240:
+            error = error[:239].rstrip() + "..."
+        return f"\n<b>Последняя ошибка:</b> {html.escape(error)}"
