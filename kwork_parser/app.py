@@ -9,8 +9,8 @@ from .config import Settings
 from .kwork import KworkClient
 from .models import Project
 from .notifier import TelegramDraftAction, TelegramHealthCommand, TelegramNotifier
+from .response_drafts import ResponseDraftService
 from .scoring import (
-    OpenRouterResponseDraftGenerator,
     OpenRouterScorer,
     RuleScorer,
     ScoreResult,
@@ -29,7 +29,7 @@ class Application:
         self.storage = Storage(settings.database_path)
         self.rule_scorer = RuleScorer(settings)
         self.ai_scorer = OpenRouterScorer(settings) if settings.ai_enabled else None
-        self.response_draft_generator = OpenRouterResponseDraftGenerator(settings) if settings.ai_enabled else None
+        self.response_draft_generator = ResponseDraftService(settings) if settings.response_draft_enabled else None
         self.notifier = TelegramNotifier(settings)
 
     def run_once(self) -> int:

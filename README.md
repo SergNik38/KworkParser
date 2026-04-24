@@ -119,6 +119,16 @@ AI-анализ включается автоматически, если зад
 черновик отклика по кнопке `Отклик`. Это только текстовый черновик: бот не отправляет
 отклик на Kwork от вашего имени.
 
+Для генерации откликов можно задать отдельную, более мощную модель и отдельные параметры,
+не меняя модель основного AI-фильтра:
+
+- `RESPONSE_DRAFT_API_KEY`
+- `RESPONSE_DRAFT_MODEL`
+- `RESPONSE_DRAFT_BASE_URL`
+- `RESPONSE_DRAFT_TIMEOUT_SECONDS`
+
+Если они не заданы, генератор откликов использует `OPENROUTER_*` настройки.
+
 У черновика есть кнопки:
 
 - `Переделать отклик`: сгенерировать новый вариант
@@ -169,6 +179,7 @@ Callback-нажатия с inline-кнопок читаются через Teleg
 - `kwork_parser/kwork.py`: клиент Kwork
 - `kwork_parser/storage.py`: SQLite-хранилище
 - `kwork_parser/scoring.py`: rule-based и AI scoring
+- `kwork_parser/response_drafts.py`: генерация черновиков отклика
 - `kwork_parser/notifier.py`: Telegram Bot API
 - `kwork_parser/app.py`: orchestration
 

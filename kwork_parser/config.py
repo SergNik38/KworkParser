@@ -72,12 +72,22 @@ class Settings:
     openrouter_model: str | None
     openrouter_site_url: str | None
     openrouter_site_name: str | None
+    response_draft_api_key: str | None
+    response_draft_model: str | None
+    response_draft_base_url: str | None
+    response_draft_timeout_seconds: int | None
     ai_profile_brief: str
     ai_extra_instructions: str
 
     @property
     def ai_enabled(self) -> bool:
         return bool(self.openrouter_api_key and self.openrouter_model)
+
+    @property
+    def response_draft_enabled(self) -> bool:
+        api_key = self.response_draft_api_key or self.openrouter_api_key
+        model = self.response_draft_model or self.openrouter_model
+        return bool(api_key and model)
 
     @property
     def telegram_enabled(self) -> bool:
@@ -109,6 +119,10 @@ class Settings:
             openrouter_model=os.getenv("OPENROUTER_MODEL") or None,
             openrouter_site_url=os.getenv("OPENROUTER_SITE_URL") or None,
             openrouter_site_name=os.getenv("OPENROUTER_SITE_NAME") or None,
+            response_draft_api_key=os.getenv("RESPONSE_DRAFT_API_KEY") or None,
+            response_draft_model=os.getenv("RESPONSE_DRAFT_MODEL") or None,
+            response_draft_base_url=os.getenv("RESPONSE_DRAFT_BASE_URL") or None,
+            response_draft_timeout_seconds=_parse_int(os.getenv("RESPONSE_DRAFT_TIMEOUT_SECONDS")),
             ai_profile_brief=os.getenv(
                 "AI_PROFILE_BRIEF",
                 "Ищу интересные проекты по разработке ПО: backend, frontend, fullstack, mobile, боты, API, интеграции, автоматизация, DevOps, data и AI.",

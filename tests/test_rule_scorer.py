@@ -34,6 +34,10 @@ def make_settings(*, include_keywords: list[str], min_rule_score: float = 40.0) 
         openrouter_model=None,
         openrouter_site_url=None,
         openrouter_site_name=None,
+        response_draft_api_key=None,
+        response_draft_model=None,
+        response_draft_base_url=None,
+        response_draft_timeout_seconds=None,
         ai_profile_brief="",
         ai_extra_instructions="",
     )

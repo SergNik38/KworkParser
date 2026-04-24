@@ -8,7 +8,8 @@ import requests
 
 from kwork_parser.config import Settings
 from kwork_parser.models import Project
-from kwork_parser.scoring import OpenRouterResponseDraftGenerator, OpenRouterScorer, ScoreResult
+from kwork_parser.response_drafts import ResponseDraftService
+from kwork_parser.scoring import OpenRouterScorer, ScoreResult
 
 
 def make_settings() -> Settings:
@@ -35,6 +36,10 @@ def make_settings() -> Settings:
         openrouter_model="test-model",
         openrouter_site_url=None,
         openrouter_site_name=None,
+        response_draft_api_key=None,
+        response_draft_model=None,
+        response_draft_base_url=None,
+        response_draft_timeout_seconds=None,
         ai_profile_brief="profile",
         ai_extra_instructions="extra",
     )
@@ -142,7 +147,7 @@ class OpenRouterScorerTests(unittest.TestCase):
 
 class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
     def test_generate_returns_plain_draft_text(self) -> None:
-        generator = OpenRouterResponseDraftGenerator(make_settings())
+        generator = ResponseDraftService(make_settings())
         generator.session = FakeSession(
             [
                 FakeResponse(
@@ -168,7 +173,7 @@ class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
         self.assertEqual(result, "Здравствуйте! Готов помочь с API-интеграцией.")
 
     def test_generate_rejects_empty_draft(self) -> None:
-        generator = OpenRouterResponseDraftGenerator(make_settings())
+        generator = ResponseDraftService(make_settings())
         generator.session = FakeSession(
             [
                 FakeResponse(

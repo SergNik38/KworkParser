@@ -35,6 +35,10 @@ def make_settings(database_path: Path) -> Settings:
         openrouter_model=None,
         openrouter_site_url=None,
         openrouter_site_name=None,
+        response_draft_api_key=None,
+        response_draft_model=None,
+        response_draft_base_url=None,
+        response_draft_timeout_seconds=None,
         ai_profile_brief="",
         ai_extra_instructions="",
     )
