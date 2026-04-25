@@ -41,6 +41,10 @@ class ResponseDraft:
     project_id: int
     text: str
     variant: str
+    demo_available: bool = False
+    demo_summary: str = ""
+    demo_path: str = ""
+    demo_archive_path: str = ""
 
 
 class Storage:
@@ -102,6 +106,10 @@ class Storage:
                 project_id INTEGER PRIMARY KEY,
                 text TEXT NOT NULL,
                 variant TEXT NOT NULL DEFAULT 'default',
+                demo_available INTEGER NOT NULL DEFAULT 0,
+                demo_summary TEXT,
+                demo_path TEXT,
+                demo_archive_path TEXT,
                 status TEXT NOT NULL DEFAULT 'draft',
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
@@ -109,6 +117,7 @@ class Storage:
         )
         self._migrate_schema()
         self._migrate_feedback_schema()
+        self._migrate_response_drafts_schema()
         self.connection.commit()
 
     def _migrate_schema(self) -> None:
@@ -183,6 +192,21 @@ class Storage:
         )
         self.connection.execute("DROP TABLE project_feedback")
         self.connection.execute("ALTER TABLE project_feedback_new RENAME TO project_feedback")
+
+    def _migrate_response_drafts_schema(self) -> None:
+        columns = {
+            row["name"]
+            for row in self.connection.execute("PRAGMA table_info(response_drafts)").fetchall()
+        }
+        migrations = {
+            "demo_available": "ALTER TABLE response_drafts ADD COLUMN demo_available INTEGER NOT NULL DEFAULT 0",
+            "demo_summary": "ALTER TABLE response_drafts ADD COLUMN demo_summary TEXT",
+            "demo_path": "ALTER TABLE response_drafts ADD COLUMN demo_path TEXT",
+            "demo_archive_path": "ALTER TABLE response_drafts ADD COLUMN demo_archive_path TEXT",
+        }
+        for column, statement in migrations.items():
+            if column not in columns:
+                self.connection.execute(statement)
 
     def is_known(self, project_id: int) -> bool:
         row = self.connection.execute(
@@ -341,22 +365,35 @@ class Storage:
     def save_response_draft(self, draft: ResponseDraft) -> None:
         self.connection.execute(
             """
-            INSERT INTO response_drafts (project_id, text, variant, status, updated_at)
-            VALUES (?, ?, ?, 'draft', CURRENT_TIMESTAMP)
+            INSERT INTO response_drafts (
+                project_id, text, variant, demo_available, demo_summary,
+                demo_path, demo_archive_path, status, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, NULL, NULL, 'draft', CURRENT_TIMESTAMP)
             ON CONFLICT(project_id) DO UPDATE SET
                 text = excluded.text,
                 variant = excluded.variant,
+                demo_available = excluded.demo_available,
+                demo_summary = excluded.demo_summary,
+                demo_path = NULL,
+                demo_archive_path = NULL,
                 status = 'draft',
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (draft.project_id, draft.text, draft.variant),
+            (
+                draft.project_id,
+                draft.text,
+                draft.variant,
+                1 if draft.demo_available else 0,
+                draft.demo_summary or None,
+            ),
         )
         self.connection.commit()
 
     def get_response_draft(self, project_id: int) -> ResponseDraft | None:
         row = self.connection.execute(
             """
-            SELECT project_id, text, variant
+            SELECT project_id, text, variant, demo_available, demo_summary, demo_path, demo_archive_path
             FROM response_drafts
             WHERE project_id = ?
             """,
@@ -368,7 +405,24 @@ class Storage:
             project_id=int(row["project_id"]),
             text=row["text"],
             variant=row["variant"],
+            demo_available=bool(row["demo_available"]),
+            demo_summary=row["demo_summary"] or "",
+            demo_path=row["demo_path"] or "",
+            demo_archive_path=row["demo_archive_path"] or "",
         )
+
+    def save_demo_project_artifacts(self, project_id: int, demo_path: str, demo_archive_path: str) -> None:
+        self.connection.execute(
+            """
+            UPDATE response_drafts
+            SET demo_path = ?,
+                demo_archive_path = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE project_id = ?
+            """,
+            (demo_path, demo_archive_path, project_id),
+        )
+        self.connection.commit()
 
     def mark_response_draft_sent_manually(self, project_id: int) -> None:
         self.connection.execute(

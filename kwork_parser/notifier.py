@@ -9,7 +9,9 @@ import requests
 
 from .config import Settings
 from .models import Project
+from .response_drafts import GeneratedDemoProject
 from .scoring import ScoreResult
+from .storage import ResponseDraft
 
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,7 @@ DRAFT_ACTION_LABELS = {
     "regenerate": "Переделать отклик",
     "short": "Короче",
     "questions": "Добавить вопросы",
+    "demo": "Демо",
     "sent": "Отправил вручную",
 }
 
@@ -198,9 +201,9 @@ class TelegramNotifier:
         if not payload.get("ok"):
             raise RuntimeError(f"Telegram health response API error: {payload!r}")
 
-    def send_response_draft(self, project: Project, draft_text: str) -> None:
+    def send_response_draft(self, project: Project, draft: ResponseDraft) -> None:
         if self.settings.dry_run:
-            logger.info("Dry-run response draft for project %s:\n%s", project.id, draft_text)
+            logger.info("Dry-run response draft for project %s:\n%s", project.id, draft.text)
             return
 
         if not self.settings.telegram_enabled:
@@ -210,10 +213,10 @@ class TelegramNotifier:
             f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage",
             json={
                 "chat_id": self.settings.telegram_chat_id,
-                "text": self._format_response_draft(project, draft_text),
+                "text": self._format_response_draft(project, draft),
                 "parse_mode": "HTML",
                 "disable_web_page_preview": True,
-                "reply_markup": self._build_draft_reply_markup(project),
+                "reply_markup": self._build_draft_reply_markup(project, draft),
             },
             timeout=self.settings.request_timeout_seconds,
         )
@@ -221,6 +224,40 @@ class TelegramNotifier:
         payload = response.json()
         if not payload.get("ok"):
             raise RuntimeError(f"Telegram response draft API error: {payload!r}")
+
+    def send_demo_project(self, project: Project, demo_project: GeneratedDemoProject) -> None:
+        if self.settings.dry_run:
+            logger.info(
+                "Dry-run demo project for %s stored in %s",
+                project.id,
+                demo_project.output_dir,
+            )
+            return
+
+        if not self.settings.telegram_enabled:
+            raise RuntimeError("Telegram is disabled: configure TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
+
+        with demo_project.archive_path.open("rb") as document:
+            response = self.session.post(
+                f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendDocument",
+                data={
+                    "chat_id": self.settings.telegram_chat_id,
+                    "caption": self._format_demo_caption(project, demo_project),
+                    "parse_mode": "HTML",
+                },
+                files={
+                    "document": (
+                        demo_project.archive_path.name,
+                        document,
+                        "application/zip",
+                    )
+                },
+                timeout=self.settings.request_timeout_seconds,
+            )
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("ok"):
+            raise RuntimeError(f"Telegram demo project API error: {payload!r}")
 
     def _format_message(self, project: Project, rule_result: ScoreResult, ai_result: ScoreResult | None) -> str:
         budget = project.budget_rub or project.possible_budget_rub
@@ -289,39 +326,67 @@ class TelegramNotifier:
             ]
         }
 
-    def _format_response_draft(self, project: Project, draft_text: str) -> str:
+    def _format_response_draft(self, project: Project, draft: ResponseDraft) -> str:
+        demo_block = ""
+        if draft.demo_available:
+            demo_block = f"\n\n<b>Демо:</b> можно собрать\n{html.escape(draft.demo_summary)}"
         return (
             f"<b>Черновик отклика</b>\n"
             f"<b>Проект:</b> {html.escape(project.title)}\n"
             f"<b>Ссылка:</b> {project.url}\n\n"
-            f"{html.escape(draft_text)}"
+            f"{html.escape(draft.text)}"
+            f"{demo_block}"
         )
 
-    def _build_draft_reply_markup(self, project: Project) -> dict:
-        return {
-            "inline_keyboard": [
+    def _build_draft_reply_markup(self, project: Project, draft: ResponseDraft) -> dict:
+        keyboard = [
+            [
+                {
+                    "text": DRAFT_ACTION_LABELS["regenerate"],
+                    "callback_data": f"draft:{project.id}:regenerate",
+                },
+                {
+                    "text": DRAFT_ACTION_LABELS["short"],
+                    "callback_data": f"draft:{project.id}:short",
+                },
+            ],
+            [
+                {
+                    "text": DRAFT_ACTION_LABELS["questions"],
+                    "callback_data": f"draft:{project.id}:questions",
+                },
+            ],
+        ]
+        if draft.demo_available:
+            keyboard[1].append(
+                {
+                    "text": DRAFT_ACTION_LABELS["demo"],
+                    "callback_data": f"draft:{project.id}:demo",
+                }
+            )
+            keyboard.append(
                 [
-                    {
-                        "text": DRAFT_ACTION_LABELS["regenerate"],
-                        "callback_data": f"draft:{project.id}:regenerate",
-                    },
-                    {
-                        "text": DRAFT_ACTION_LABELS["short"],
-                        "callback_data": f"draft:{project.id}:short",
-                    },
-                ],
-                [
-                    {
-                        "text": DRAFT_ACTION_LABELS["questions"],
-                        "callback_data": f"draft:{project.id}:questions",
-                    },
                     {
                         "text": DRAFT_ACTION_LABELS["sent"],
                         "callback_data": f"draft:{project.id}:sent",
                     },
-                ],
-            ]
-        }
+                ]
+            )
+        else:
+            keyboard[1].append(
+                {
+                    "text": DRAFT_ACTION_LABELS["sent"],
+                    "callback_data": f"draft:{project.id}:sent",
+                }
+            )
+        return {"inline_keyboard": keyboard}
+
+    def _format_demo_caption(self, project: Project, demo_project: GeneratedDemoProject) -> str:
+        return (
+            f"<b>Демо-проект</b>\n"
+            f"<b>Проект:</b> {html.escape(project.title)}\n"
+            f"<b>Что внутри:</b> {html.escape(demo_project.summary)}"
+        )
 
     def _parse_feedback_update(
         self,

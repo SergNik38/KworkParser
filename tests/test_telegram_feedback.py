@@ -15,6 +15,7 @@ from kwork_parser.notifier import (
     TelegramHealthCommand,
     TelegramNotifier,
 )
+from kwork_parser.response_drafts import GeneratedDemoProject, ResponseDraftResult
 from kwork_parser.scoring import ScoreResult
 from kwork_parser.storage import ProjectFeedback, ResponseDraft, Storage
 
@@ -152,19 +153,49 @@ class FakeHealthNotifier:
 class FakeDraftGenerator:
     def __init__(self) -> None:
         self.calls: list[tuple[int, str]] = []
+        self.demo_calls: list[tuple[int, str]] = []
 
-    def generate(self, project: Project, rule_result: ScoreResult, ai_result: ScoreResult | None, variant: str) -> str:
+    def generate(
+        self,
+        project: Project,
+        rule_result: ScoreResult,
+        ai_result: ScoreResult | None,
+        variant: str,
+    ) -> ResponseDraftResult:
         self.calls.append((project.id, variant))
-        return f"Черновик {variant}"
+        return ResponseDraftResult(
+            text=f"Черновик {variant}",
+            demo_available=True,
+            demo_summary="Можно показать небольшой прототип.",
+        )
+
+    def generate_demo_project(
+        self,
+        project: Project,
+        rule_result: ScoreResult,
+        ai_result: ScoreResult | None,
+        demo_summary: str,
+    ) -> GeneratedDemoProject:
+        self.demo_calls.append((project.id, demo_summary))
+        return GeneratedDemoProject(
+            name="demo-project",
+            summary=demo_summary,
+            output_dir=Path("/tmp/demo-project"),
+            archive_path=Path("/tmp/demo-project.zip"),
+        )
 
 
 class FakeDraftNotifier:
     def __init__(self) -> None:
-        self.drafts: list[tuple[int, str]] = []
+        self.drafts: list[tuple[int, str, bool]] = []
+        self.demo_projects: list[tuple[int, str]] = []
         self.answers: list[tuple[str, str]] = []
 
-    def send_response_draft(self, project: Project, draft_text: str) -> None:
-        self.drafts.append((project.id, draft_text))
+    def send_response_draft(self, project: Project, draft: ResponseDraft) -> None:
+        self.drafts.append((project.id, draft.text, draft.demo_available))
+
+    def send_demo_project(self, project: Project, demo_project: GeneratedDemoProject) -> None:
+        self.demo_projects.append((project.id, demo_project.summary))
 
     def answer_feedback(self, callback_query_id: str, feedback: str) -> None:
         self.answers.append((callback_query_id, feedback))
@@ -205,12 +236,20 @@ class TelegramFeedbackTests(unittest.TestCase):
     def test_draft_message_contains_text_and_buttons(self) -> None:
         notifier = TelegramNotifier(make_settings())
         project = make_project()
+        draft = ResponseDraft(
+            project_id=project.id,
+            text="Готов помочь с задачей.",
+            variant="default",
+            demo_available=True,
+            demo_summary="Можно собрать мини-демо по описанию заказа.",
+        )
 
-        message = notifier._format_response_draft(project, "Готов помочь с задачей.")
-        markup = notifier._build_draft_reply_markup(project)
+        message = notifier._format_response_draft(project, draft)
+        markup = notifier._build_draft_reply_markup(project, draft)
 
         self.assertIn("Черновик отклика", message)
         self.assertIn("Готов помочь", message)
+        self.assertIn("Демо", message)
         callback_data = [
             button.get("callback_data")
             for row in markup["inline_keyboard"]
@@ -223,6 +262,7 @@ class TelegramFeedbackTests(unittest.TestCase):
                 "draft:1001:regenerate",
                 "draft:1001:short",
                 "draft:1001:questions",
+                "draft:1001:demo",
                 "draft:1001:sent",
             ],
         )
@@ -358,7 +398,49 @@ class TelegramFeedbackTests(unittest.TestCase):
             self.assertTrue(generated)
             self.assertEqual(draft.text, "Черновик short")
             self.assertEqual(draft.variant, "short")
-            self.assertEqual(app.notifier.drafts, [(1001, "Черновик short")])
+            self.assertTrue(draft.demo_available)
+            self.assertEqual(draft.demo_summary, "Можно показать небольшой прототип.")
+            self.assertEqual(app.notifier.drafts, [(1001, "Черновик short", True)])
+
+    def test_application_generates_demo_project_when_draft_allows_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = Application(make_settings(Path(tmpdir) / "kwork_parser.db"))
+            app.response_draft_generator = FakeDraftGenerator()
+            app.notifier = FakeDraftNotifier()
+            project = make_project()
+            rule_result = ScoreResult(70, "rule", [])
+            app.storage.save_project(project, rule_result)
+            app.storage.save_response_draft(
+                ResponseDraft(
+                    project_id=project.id,
+                    text="Черновик",
+                    variant="default",
+                    demo_available=True,
+                    demo_summary="Можно показать небольшой прототип.",
+                )
+            )
+
+            app._handle_draft_action(
+                TelegramDraftAction(
+                    project_id=project.id,
+                    action="demo",
+                    update_id=2,
+                    callback_query_id="demo-callback",
+                    telegram_user_id=123,
+                    telegram_username="user",
+                    payload={},
+                )
+            )
+
+            draft = app.storage.get_response_draft(project.id)
+            self.assertEqual(
+                app.response_draft_generator.demo_calls,
+                [(1001, "Можно показать небольшой прототип.")],
+            )
+            self.assertEqual(app.notifier.demo_projects, [(1001, "Можно показать небольшой прототип.")])
+            self.assertEqual(app.notifier.answers, [("demo-callback", "Демо подготовлено")])
+            self.assertEqual(draft.demo_path, "/tmp/demo-project")
+            self.assertEqual(draft.demo_archive_path, "/tmp/demo-project.zip")
 
     def test_application_marks_response_draft_sent_manually(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

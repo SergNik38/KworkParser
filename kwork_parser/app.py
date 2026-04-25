@@ -194,14 +194,47 @@ class Application:
             return False
 
         try:
-            draft_text = self.response_draft_generator.generate(project, rule_result, ai_result, variant=variant)
-            self.storage.save_response_draft(
-                ResponseDraft(project_id=project.id, text=draft_text, variant=variant)
+            draft_result = self.response_draft_generator.generate(project, rule_result, ai_result, variant=variant)
+            draft = ResponseDraft(
+                project_id=project.id,
+                text=draft_result.text,
+                variant=variant,
+                demo_available=draft_result.demo_available,
+                demo_summary=draft_result.demo_summary,
             )
-            self.notifier.send_response_draft(project, draft_text)
+            self.storage.save_response_draft(draft)
+            self.notifier.send_response_draft(project, draft)
             return True
         except Exception:
             logger.warning("Response draft generation failed for project %s", project.id, exc_info=True)
+            return False
+
+    def _send_demo_project(
+        self,
+        project: Project,
+        rule_result: ScoreResult,
+        ai_result: ScoreResult | None,
+        demo_summary: str,
+    ) -> bool:
+        if not self.response_draft_generator:
+            return False
+
+        try:
+            demo_project = self.response_draft_generator.generate_demo_project(
+                project,
+                rule_result,
+                ai_result,
+                demo_summary=demo_summary,
+            )
+            self.storage.save_demo_project_artifacts(
+                project.id,
+                str(demo_project.output_dir),
+                str(demo_project.archive_path),
+            )
+            self.notifier.send_demo_project(project, demo_project)
+            return True
+        except Exception:
+            logger.warning("Demo project generation failed for project %s", project.id, exc_info=True)
             return False
 
     def _handle_draft_action(self, action: TelegramDraftAction) -> None:
@@ -214,6 +247,23 @@ class Application:
             candidate = self.storage.get_project_candidate(action.project_id)
             if not candidate:
                 self.notifier.answer_feedback(action.callback_query_id, "Проект не найден в базе")
+                return
+
+            draft = self.storage.get_response_draft(action.project_id)
+            if action.action == "demo":
+                if not draft or not draft.demo_available:
+                    self.notifier.answer_feedback(action.callback_query_id, "Для этого заказа пока не хватает данных на демо")
+                    return
+                generated = self._send_demo_project(
+                    candidate.project,
+                    candidate.rule_result,
+                    candidate.ai_result,
+                    demo_summary=draft.demo_summary,
+                )
+                self.notifier.answer_feedback(
+                    action.callback_query_id,
+                    "Демо подготовлено" if generated else "Не удалось подготовить демо",
+                )
                 return
 
             variant = "default" if action.action in {"generate", "regenerate"} else action.action

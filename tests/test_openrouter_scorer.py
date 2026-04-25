@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,7 +9,7 @@ import requests
 
 from kwork_parser.config import Settings
 from kwork_parser.models import Project
-from kwork_parser.response_drafts import ResponseDraftService
+from kwork_parser.response_drafts import GeneratedDemoProject, ResponseDraftResult, ResponseDraftService
 from kwork_parser.scoring import OpenRouterScorer, ScoreResult
 
 
@@ -146,7 +147,7 @@ class OpenRouterScorerTests(unittest.TestCase):
 
 
 class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
-    def test_generate_returns_plain_draft_text(self) -> None:
+    def test_generate_returns_structured_draft_and_demo_flag(self) -> None:
         generator = ResponseDraftService(make_settings())
         generator.session = FakeSession(
             [
@@ -155,7 +156,11 @@ class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
                         "choices": [
                             {
                                 "message": {
-                                    "content": "Здравствуйте! Готов помочь с API-интеграцией."
+                                    "content": (
+                                        '{"draft_text": "Здравствуйте! Готов помочь с API-интеграцией.", '
+                                        '"demo_available": true, '
+                                        '"demo_summary": "Можно показать мини-демо формы и API-обмена."}'
+                                    )
                                 }
                             }
                         ]
@@ -170,7 +175,14 @@ class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
             ScoreResult(80, "ai", ["integration"]),
         )
 
-        self.assertEqual(result, "Здравствуйте! Готов помочь с API-интеграцией.")
+        self.assertEqual(
+            result,
+            ResponseDraftResult(
+                text="Здравствуйте! Готов помочь с API-интеграцией.",
+                demo_available=True,
+                demo_summary="Можно показать мини-демо формы и API-обмена.",
+            ),
+        )
 
     def test_generate_rejects_empty_draft(self) -> None:
         generator = ResponseDraftService(make_settings())
@@ -181,7 +193,7 @@ class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
                         "choices": [
                             {
                                 "message": {
-                                    "content": " "
+                                    "content": '{"draft_text": "", "demo_available": false, "demo_summary": ""}'
                                 }
                             }
                         ]
@@ -192,6 +204,49 @@ class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "draft is empty"):
             generator.generate(make_project(), ScoreResult(70, "rule", []), None)
+
+    def test_generate_demo_project_writes_files_and_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = make_settings()
+            settings.database_path = Path(tmpdir) / "kwork_parser.db"
+            generator = ResponseDraftService(settings)
+            generator.session = FakeSession(
+                [
+                    FakeResponse(
+                        {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "content": (
+                                            '{"project_name": "demo-bot", '
+                                            '"summary": "Мини-демо Telegram-формы.", '
+                                            '"stack": ["HTML", "JavaScript"], '
+                                            '"run_steps": ["Открыть index.html"], '
+                                            '"files": ['
+                                            '{"path": "index.html", "content": "<h1>Demo</h1>"}, '
+                                            '{"path": "app.js", "content": "console.log(1);"}'
+                                            ']}'
+                                        )
+                                    }
+                                }
+                            ]
+                        }
+                    )
+                ]
+            )
+
+            result = generator.generate_demo_project(
+                make_project(),
+                ScoreResult(70, "rule", ["api"]),
+                ScoreResult(80, "ai", ["integration"]),
+                demo_summary="Можно показать мини-демо формы и API-обмена.",
+            )
+
+            self.assertIsInstance(result, GeneratedDemoProject)
+            self.assertTrue((result.output_dir / "index.html").exists())
+            self.assertTrue((result.output_dir / "app.js").exists())
+            self.assertTrue((result.output_dir / "README.md").exists())
+            self.assertTrue(result.archive_path.exists())
 
 
 if __name__ == "__main__":
