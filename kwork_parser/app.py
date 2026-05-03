@@ -215,9 +215,9 @@ class Application:
         rule_result: ScoreResult,
         ai_result: ScoreResult | None,
         demo_summary: str,
-    ) -> bool:
+    ) -> tuple[bool, str]:
         if not self.response_draft_generator:
-            return False
+            return False, "Генератор откликов не настроен"
 
         try:
             demo_project = self.response_draft_generator.generate_demo_project(
@@ -232,10 +232,10 @@ class Application:
                 str(demo_project.archive_path),
             )
             self.notifier.send_demo_project(project, demo_project)
-            return True
-        except Exception:
+            return True, ""
+        except Exception as exc:
             logger.warning("Demo project generation failed for project %s", project.id, exc_info=True)
-            return False
+            return False, self._format_demo_error(exc)
 
     def _handle_draft_action(self, action: TelegramDraftAction) -> None:
         try:
@@ -254,12 +254,21 @@ class Application:
                 if not draft or not draft.demo_available:
                     self.notifier.answer_feedback(action.callback_query_id, "Для этого заказа пока не хватает данных на демо")
                     return
-                generated = self._send_demo_project(
+                generated, error_text = self._send_demo_project(
                     candidate.project,
                     candidate.rule_result,
                     candidate.ai_result,
                     demo_summary=draft.demo_summary,
                 )
+                if not generated:
+                    try:
+                        self.notifier.send_demo_status(candidate.project, error_text)
+                    except Exception:
+                        logger.warning(
+                            "Failed to send demo error status for project %s",
+                            action.project_id,
+                            exc_info=True,
+                        )
                 self.notifier.answer_feedback(
                     action.callback_query_id,
                     "Демо подготовлено" if generated else "Не удалось подготовить демо",
@@ -308,3 +317,9 @@ class Application:
         if len(error) > 240:
             error = error[:239].rstrip() + "..."
         return f"\n<b>Последняя ошибка:</b> {html.escape(error)}"
+
+    def _format_demo_error(self, exc: Exception) -> str:
+        message = str(exc).strip() or exc.__class__.__name__
+        if len(message) > 220:
+            message = message[:219].rstrip() + "..."
+        return f"Не удалось подготовить демо: {message}"

@@ -83,24 +83,10 @@ class TelegramNotifier:
             logger.info("Dry-run notification preview:\n%s\n%s\n%s", "=" * 80, message, "=" * 80)
             return
 
-        if not self.settings.telegram_enabled:
-            raise RuntimeError("Telegram is disabled: configure TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
-
-        response = self.session.post(
-            f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage",
-            json={
-                "chat_id": self.settings.telegram_chat_id,
-                "text": message,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-                "reply_markup": self._build_reply_markup(project),
-            },
-            timeout=self.settings.request_timeout_seconds,
+        self._send_message(
+            message,
+            reply_markup=self._build_reply_markup(project),
         )
-        response.raise_for_status()
-        payload = response.json()
-        if not payload.get("ok"):
-            raise RuntimeError(f"Telegram API error: {payload!r}")
 
     def fetch_feedback(self, offset: int | None) -> TelegramFeedbackPoll:
         if not self.settings.telegram_enabled:
@@ -206,24 +192,10 @@ class TelegramNotifier:
             logger.info("Dry-run response draft for project %s:\n%s", project.id, draft.text)
             return
 
-        if not self.settings.telegram_enabled:
-            raise RuntimeError("Telegram is disabled: configure TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
-
-        response = self.session.post(
-            f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage",
-            json={
-                "chat_id": self.settings.telegram_chat_id,
-                "text": self._format_response_draft(project, draft),
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-                "reply_markup": self._build_draft_reply_markup(project, draft),
-            },
-            timeout=self.settings.request_timeout_seconds,
+        self._send_message(
+            self._format_response_draft(project, draft),
+            reply_markup=self._build_draft_reply_markup(project, draft),
         )
-        response.raise_for_status()
-        payload = response.json()
-        if not payload.get("ok"):
-            raise RuntimeError(f"Telegram response draft API error: {payload!r}")
 
     def send_demo_project(self, project: Project, demo_project: GeneratedDemoProject) -> None:
         if self.settings.dry_run:
@@ -258,6 +230,18 @@ class TelegramNotifier:
         payload = response.json()
         if not payload.get("ok"):
             raise RuntimeError(f"Telegram demo project API error: {payload!r}")
+
+    def send_demo_status(self, project: Project, text: str) -> None:
+        if self.settings.dry_run:
+            logger.info("Dry-run demo status for project %s: %s", project.id, text)
+            return
+        self._send_message(
+            (
+                f"<b>Демо</b>\n"
+                f"<b>Проект:</b> {html.escape(project.title)}\n"
+                f"{html.escape(text)}"
+            )
+        )
 
     def _format_message(self, project: Project, rule_result: ScoreResult, ai_result: ScoreResult | None) -> str:
         budget = project.budget_rub or project.possible_budget_rub
@@ -387,6 +371,29 @@ class TelegramNotifier:
             f"<b>Проект:</b> {html.escape(project.title)}\n"
             f"<b>Что внутри:</b> {html.escape(demo_project.summary)}"
         )
+
+    def _send_message(self, text: str, reply_markup: dict | None = None) -> None:
+        if not self.settings.telegram_enabled:
+            raise RuntimeError("Telegram is disabled: configure TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
+
+        payload: dict[str, object] = {
+            "chat_id": self.settings.telegram_chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+
+        response = self.session.post(
+            f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage",
+            json=payload,
+            timeout=self.settings.request_timeout_seconds,
+        )
+        response.raise_for_status()
+        body = response.json()
+        if not body.get("ok"):
+            raise RuntimeError(f"Telegram API error: {body!r}")
 
     def _parse_feedback_update(
         self,

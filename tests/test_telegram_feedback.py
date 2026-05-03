@@ -189,6 +189,7 @@ class FakeDraftNotifier:
     def __init__(self) -> None:
         self.drafts: list[tuple[int, str, bool]] = []
         self.demo_projects: list[tuple[int, str]] = []
+        self.demo_statuses: list[tuple[int, str]] = []
         self.answers: list[tuple[str, str]] = []
 
     def send_response_draft(self, project: Project, draft: ResponseDraft) -> None:
@@ -196,6 +197,9 @@ class FakeDraftNotifier:
 
     def send_demo_project(self, project: Project, demo_project: GeneratedDemoProject) -> None:
         self.demo_projects.append((project.id, demo_project.summary))
+
+    def send_demo_status(self, project: Project, text: str) -> None:
+        self.demo_statuses.append((project.id, text))
 
     def answer_feedback(self, callback_query_id: str, feedback: str) -> None:
         self.answers.append((callback_query_id, feedback))
@@ -441,6 +445,52 @@ class TelegramFeedbackTests(unittest.TestCase):
             self.assertEqual(app.notifier.answers, [("demo-callback", "Демо подготовлено")])
             self.assertEqual(draft.demo_path, "/tmp/demo-project")
             self.assertEqual(draft.demo_archive_path, "/tmp/demo-project.zip")
+
+    def test_application_reports_demo_generation_error_to_chat(self) -> None:
+        class FailingDraftGenerator(FakeDraftGenerator):
+            def generate_demo_project(
+                self,
+                project: Project,
+                rule_result: ScoreResult,
+                ai_result: ScoreResult | None,
+                demo_summary: str,
+            ) -> GeneratedDemoProject:
+                raise ValueError("модель не вернула валидные файлы демо")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            app = Application(make_settings(Path(tmpdir) / "kwork_parser.db"))
+            app.response_draft_generator = FailingDraftGenerator()
+            app.notifier = FakeDraftNotifier()
+            project = make_project()
+            rule_result = ScoreResult(70, "rule", [])
+            app.storage.save_project(project, rule_result)
+            app.storage.save_response_draft(
+                ResponseDraft(
+                    project_id=project.id,
+                    text="Черновик",
+                    variant="default",
+                    demo_available=True,
+                    demo_summary="Можно показать небольшой прототип.",
+                )
+            )
+
+            app._handle_draft_action(
+                TelegramDraftAction(
+                    project_id=project.id,
+                    action="demo",
+                    update_id=2,
+                    callback_query_id="demo-callback",
+                    telegram_user_id=123,
+                    telegram_username="user",
+                    payload={},
+                )
+            )
+
+            self.assertEqual(
+                app.notifier.demo_statuses,
+                [(1001, "Не удалось подготовить демо: модель не вернула валидные файлы демо")],
+            )
+            self.assertEqual(app.notifier.answers, [("demo-callback", "Не удалось подготовить демо")])
 
     def test_application_marks_response_draft_sent_manually(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

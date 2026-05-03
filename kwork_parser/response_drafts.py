@@ -65,6 +65,10 @@ class ResponseDraftService:
 
         demo_available = self._parse_bool(parsed.get("demo_available"))
         demo_summary = self._clean_text(parsed.get("demo_summary")) if demo_available else ""
+        inferred_demo_summary = self._infer_demo_summary(project)
+        if inferred_demo_summary and (not demo_available or not demo_summary):
+            demo_available = True
+            demo_summary = inferred_demo_summary
         return ResponseDraftResult(
             text=draft_text,
             demo_available=demo_available,
@@ -80,13 +84,18 @@ class ResponseDraftService:
     ) -> GeneratedDemoProject:
         prompt_payload = self._build_base_payload(project, rule_result, ai_result, variant="demo")
         prompt_payload["demo_summary"] = demo_summary
-        parsed = self._request_json(
+        raw_content = self._request_content(
             load_demo_project_prompt(),
             prompt_payload,
             temperature=0.25,
             max_tokens=2400,
         )
-        return self._write_demo_project(project, parsed, demo_summary)
+        parsed = self._extract_json(raw_content)
+        normalized = self._normalize_demo_payload(parsed)
+        if not normalized.get("files"):
+            repaired = self._repair_demo_payload(raw_content, demo_summary)
+            normalized = self._normalize_demo_payload(repaired)
+        return self._write_demo_project(project, normalized, demo_summary)
 
     def _build_base_payload(
         self,
@@ -242,6 +251,123 @@ class ResponseDraftService:
         text = str(value or "").strip().lower()
         return text in {"1", "true", "yes", "on"}
 
+    def _repair_demo_payload(self, raw_content: str, demo_summary: str) -> dict:
+        return self._request_json(
+            load_demo_project_repair_prompt(),
+            {
+                "demo_summary": demo_summary,
+                "raw_model_response": raw_content,
+            },
+            temperature=0.0,
+            max_tokens=2600,
+        )
+
+    def _normalize_demo_payload(self, parsed: dict) -> dict:
+        if not isinstance(parsed, dict):
+            return {"files": []}
+
+        files = self._normalize_demo_files(
+            parsed.get("files")
+            or parsed.get("project_files")
+            or parsed.get("artifacts")
+            or parsed.get("demo_files")
+        )
+        if not files:
+            files = self._normalize_demo_files_from_mapping(parsed.get("files_by_path"))
+
+        project_name = (
+            self._clean_text(parsed.get("project_name"))
+            or self._clean_text(parsed.get("name"))
+            or self._clean_text(parsed.get("title"))
+        )
+        summary = (
+            self._clean_text(parsed.get("summary"))
+            or self._clean_text(parsed.get("demo_summary"))
+            or self._clean_text(parsed.get("description"))
+        )
+        stack = self._normalize_text_list(
+            parsed.get("stack")
+            or parsed.get("technologies")
+            or parsed.get("tech_stack")
+        )
+        run_steps = self._normalize_text_list(
+            parsed.get("run_steps")
+            or parsed.get("how_to_run")
+            or parsed.get("steps")
+            or parsed.get("run")
+        )
+        return {
+            "project_name": project_name,
+            "summary": summary,
+            "stack": stack,
+            "run_steps": run_steps,
+            "files": files,
+        }
+
+    def _normalize_demo_files(self, value: object) -> list[dict[str, str]]:
+        if isinstance(value, dict):
+            return self._normalize_demo_files_from_mapping(value)
+        if not isinstance(value, list):
+            return []
+
+        normalized: list[dict[str, str]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            path = (
+                self._clean_text(item.get("path"))
+                or self._clean_text(item.get("filename"))
+                or self._clean_text(item.get("file"))
+                or self._clean_text(item.get("name"))
+            )
+            content = (
+                self._clean_text(item.get("content"))
+                or self._clean_text(item.get("text"))
+                or self._clean_text(item.get("body"))
+                or self._clean_text(item.get("source"))
+                or self._clean_text(item.get("code"))
+            )
+            if path and content:
+                normalized.append({"path": path, "content": content})
+        return normalized
+
+    def _normalize_demo_files_from_mapping(self, value: object) -> list[dict[str, str]]:
+        if not isinstance(value, dict):
+            return []
+        normalized: list[dict[str, str]] = []
+        for path, content in value.items():
+            clean_path = self._clean_text(path)
+            clean_content = self._clean_text(content)
+            if clean_path and clean_content:
+                normalized.append({"path": clean_path, "content": clean_content})
+        return normalized
+
+    def _normalize_text_list(self, value: object) -> list[str]:
+        if isinstance(value, list):
+            return [item for item in (self._clean_text(item) for item in value) if item]
+        if isinstance(value, str):
+            return [item for item in (line.strip("- ").strip() for line in value.splitlines()) if item]
+        return []
+
+    def _infer_demo_summary(self, project: Project) -> str:
+        text = project.searchable_text
+        if len(text.strip()) < 80:
+            return ""
+
+        if any(keyword in text for keyword in ("telegram", "бот", "aiogram", "bot")):
+            return "Можно показать мини-бота с ключевым сценарием, формой заявки и тестовой обработкой сообщений."
+        if any(keyword in text for keyword in ("api", "crm", "webhook", "интеграц", "rest", "graphql")):
+            return "Можно собрать демо формы или тестового сценария интеграции с моковым API и показать обмен данными."
+        if any(keyword in text for keyword in ("ios", "android", "mobile", "мобиль", "курьер", "приложени")):
+            return "Можно показать демо одного мобильного сценария: основной экран, карточку задачи и базовую навигацию."
+        if any(keyword in text for keyword in ("dashboard", "кабинет", "admin", "crm", "панель", "диспетчер")):
+            return "Можно собрать демо одного интерфейсного сценария: список объектов, карточку и базовый рабочий поток."
+        if any(keyword in text for keyword in ("parser", "парсер", "scrap", "выгруз", "import", "экспорт", "csv", "excel")):
+            return "Можно показать демо загрузки и обработки небольшого набора данных с результатом в удобном виде."
+        if any(keyword in text for keyword in ("site", "landing", "лендинг", "форма", "catalog", "каталог", "веб", "frontend", "react", "vue")):
+            return "Можно собрать небольшой интерфейсный прототип с одним основным сценарием и тестовыми данными."
+        return ""
+
     def _write_demo_project(
         self,
         project: Project,
@@ -343,4 +469,10 @@ def load_response_draft_prompt() -> str:
 @lru_cache(maxsize=1)
 def load_demo_project_prompt() -> str:
     prompt_path = Path(__file__).with_name("prompts") / "demo_project_system_prompt.txt"
+    return prompt_path.read_text(encoding="utf-8").strip()
+
+
+@lru_cache(maxsize=1)
+def load_demo_project_repair_prompt() -> str:
+    prompt_path = Path(__file__).with_name("prompts") / "demo_project_repair_system_prompt.txt"
     return prompt_path.read_text(encoding="utf-8").strip()

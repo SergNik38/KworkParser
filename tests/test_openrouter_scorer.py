@@ -205,6 +205,48 @@ class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "draft is empty"):
             generator.generate(make_project(), ScoreResult(70, "rule", []), None)
 
+    def test_generate_enables_demo_from_project_heuristic(self) -> None:
+        generator = ResponseDraftService(make_settings())
+        generator.session = FakeSession(
+            [
+                FakeResponse(
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": (
+                                        '{"draft_text": "Сделаю рабочий сценарий с тестовой интеграцией и покажу его на небольшом примере.", '
+                                        '"demo_available": false, '
+                                        '"demo_summary": ""}'
+                                    )
+                                }
+                            }
+                        ]
+                    }
+                )
+            ]
+        )
+        project = Project.from_api(
+            {
+                "id": "1002",
+                "name": "Интеграция CRM с Telegram ботом",
+                "description": (
+                    "Нужна интеграция CRM, Telegram-бота и webhook-обработки заявок. "
+                    "Нужно принимать заявку, передавать ее в CRM и показывать статус пользователю."
+                ),
+                "user": {},
+            }
+        )
+
+        result = generator.generate(
+            project,
+            ScoreResult(70, "rule", ["api"]),
+            ScoreResult(80, "ai", ["integration"]),
+        )
+
+        self.assertTrue(result.demo_available)
+        self.assertIn("мини-бота", result.demo_summary)
+
     def test_generate_demo_project_writes_files_and_archive(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             settings = make_settings()
@@ -247,6 +289,100 @@ class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
             self.assertTrue((result.output_dir / "app.js").exists())
             self.assertTrue((result.output_dir / "README.md").exists())
             self.assertTrue(result.archive_path.exists())
+
+    def test_generate_demo_project_normalizes_alternative_file_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = make_settings()
+            settings.database_path = Path(tmpdir) / "kwork_parser.db"
+            generator = ResponseDraftService(settings)
+            generator.session = FakeSession(
+                [
+                    FakeResponse(
+                        {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "content": (
+                                            '{"name": "demo-bot", '
+                                            '"description": "Мини-демо Telegram-формы.", '
+                                            '"technologies": ["HTML", "JavaScript"], '
+                                            '"how_to_run": ["Открыть index.html"], '
+                                            '"project_files": ['
+                                            '{"filename": "index.html", "body": "<h1>Demo</h1>"}, '
+                                            '{"filename": "app.js", "body": "console.log(1);"}'
+                                            ']}'
+                                        )
+                                    }
+                                }
+                            ]
+                        }
+                    )
+                ]
+            )
+
+            result = generator.generate_demo_project(
+                make_project(),
+                ScoreResult(70, "rule", ["api"]),
+                ScoreResult(80, "ai", ["integration"]),
+                demo_summary="Можно показать мини-демо формы и API-обмена.",
+            )
+
+            self.assertTrue((result.output_dir / "index.html").exists())
+            self.assertTrue((result.output_dir / "app.js").exists())
+            self.assertTrue(result.archive_path.exists())
+
+    def test_generate_demo_project_repairs_missing_files_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = make_settings()
+            settings.database_path = Path(tmpdir) / "kwork_parser.db"
+            generator = ResponseDraftService(settings)
+            generator.session = FakeSession(
+                [
+                    FakeResponse(
+                        {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "content": (
+                                            '{"summary": "Есть демо, но файлы даны в другом поле", '
+                                            '"artifacts_by_path": {"index.html": "<h1>Demo</h1>"}}'
+                                        )
+                                    }
+                                }
+                            ]
+                        }
+                    ),
+                    FakeResponse(
+                        {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "content": (
+                                            '{"project_name": "demo-bot", '
+                                            '"summary": "Мини-демо", '
+                                            '"stack": ["HTML"], '
+                                            '"run_steps": ["Открыть index.html"], '
+                                            '"files": ['
+                                            '{"path": "index.html", "content": "<h1>Demo</h1>"}'
+                                            ']}'
+                                        )
+                                    }
+                                }
+                            ]
+                        }
+                    ),
+                ]
+            )
+
+            result = generator.generate_demo_project(
+                make_project(),
+                ScoreResult(70, "rule", ["api"]),
+                ScoreResult(80, "ai", ["integration"]),
+                demo_summary="Можно показать мини-демо формы и API-обмена.",
+            )
+
+            self.assertTrue((result.output_dir / "index.html").exists())
+            self.assertEqual(generator.session.calls, 2)
 
 
 if __name__ == "__main__":
