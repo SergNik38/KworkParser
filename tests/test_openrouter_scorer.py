@@ -384,6 +384,59 @@ class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
             self.assertTrue((result.output_dir / "index.html").exists())
             self.assertEqual(generator.session.calls, 2)
 
+    def test_generate_demo_project_falls_back_when_model_returns_no_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = make_settings()
+            settings.database_path = Path(tmpdir) / "kwork_parser.db"
+            generator = ResponseDraftService(settings)
+            generator.session = FakeSession(
+                [
+                    FakeResponse(
+                        {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "content": '{"summary": "Диагностика ошибки на сайте", "files": []}'
+                                    }
+                                }
+                            ]
+                        }
+                    ),
+                    FakeResponse(
+                        {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "content": '{"summary": "Диагностика ошибки на сайте", "files": []}'
+                                    }
+                                }
+                            ]
+                        }
+                    ),
+                ]
+            )
+            project = Project.from_api(
+                {
+                    "id": "1003",
+                    "name": "Исправить ошибку на сайте",
+                    "description": "На сайте появляется ошибка при отправке формы. Нужно найти причину и исправить.",
+                    "user": {},
+                }
+            )
+
+            result = generator.generate_demo_project(
+                project,
+                ScoreResult(70, "rule", ["site"]),
+                ScoreResult(80, "ai", ["bugfix"]),
+                demo_summary="Диагностика ошибки на сайте",
+            )
+
+            self.assertTrue((result.output_dir / "README.md").exists())
+            self.assertTrue((result.output_dir / "checklist.md").exists())
+            self.assertTrue((result.output_dir / "index.html").exists())
+            self.assertTrue(result.archive_path.exists())
+            self.assertEqual(generator.session.calls, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
