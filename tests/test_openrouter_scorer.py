@@ -384,7 +384,7 @@ class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
             self.assertTrue((result.output_dir / "index.html").exists())
             self.assertEqual(generator.session.calls, 2)
 
-    def test_generate_demo_project_falls_back_when_model_returns_no_files(self) -> None:
+    def test_generate_demo_project_rejects_low_value_empty_demo(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             settings = make_settings()
             settings.database_path = Path(tmpdir) / "kwork_parser.db"
@@ -424,18 +424,51 @@ class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
                 }
             )
 
-            result = generator.generate_demo_project(
-                project,
-                ScoreResult(70, "rule", ["site"]),
-                ScoreResult(80, "ai", ["bugfix"]),
-                demo_summary="Диагностика ошибки на сайте",
+            with self.assertRaisesRegex(ValueError, "достойный демо-проект"):
+                generator.generate_demo_project(
+                    project,
+                    ScoreResult(70, "rule", ["site"]),
+                    ScoreResult(80, "ai", ["bugfix"]),
+                    demo_summary="Диагностика ошибки на сайте",
+                )
+            self.assertEqual(generator.session.calls, 2)
+
+    def test_generate_demo_project_rejects_checklist_only_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = make_settings()
+            settings.database_path = Path(tmpdir) / "kwork_parser.db"
+            generator = ResponseDraftService(settings)
+            generator.session = FakeSession(
+                [
+                    FakeResponse(
+                        {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "content": (
+                                            '{"project_name": "site-fix-demo", '
+                                            '"summary": "Диагностика", '
+                                            '"stack": ["Markdown"], '
+                                            '"run_steps": ["Прочитать checklist.md"], '
+                                            '"files": ['
+                                            '{"path": "checklist.md", "content": "# Checklist\\n\\n## Что уточнить\\n\\n- шаги для воспроизведения"}'
+                                            ']}'
+                                        )
+                                    }
+                                }
+                            ]
+                        }
+                    )
+                ]
             )
 
-            self.assertTrue((result.output_dir / "README.md").exists())
-            self.assertTrue((result.output_dir / "checklist.md").exists())
-            self.assertTrue((result.output_dir / "index.html").exists())
-            self.assertTrue(result.archive_path.exists())
-            self.assertEqual(generator.session.calls, 2)
+            with self.assertRaisesRegex(ValueError, "служебные материалы"):
+                generator.generate_demo_project(
+                    make_project(),
+                    ScoreResult(70, "rule", ["site"]),
+                    ScoreResult(80, "ai", ["bugfix"]),
+                    demo_summary="Диагностика ошибки на сайте",
+                )
 
 
 if __name__ == "__main__":

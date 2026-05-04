@@ -96,7 +96,7 @@ class ResponseDraftService:
             repaired = self._repair_demo_payload(raw_content, demo_summary)
             normalized = self._normalize_demo_payload(repaired)
         if not normalized.get("files"):
-            normalized = self._build_fallback_demo_payload(project, normalized, demo_summary)
+            raise ValueError("Модель не смогла собрать достойный демо-проект по данным заказа")
         return self._write_demo_project(project, normalized, demo_summary)
 
     def _build_base_payload(
@@ -370,123 +370,6 @@ class ResponseDraftService:
             return "Можно собрать небольшой интерфейсный прототип с одним основным сценарием и тестовыми данными."
         return ""
 
-    def _build_fallback_demo_payload(
-        self,
-        project: Project,
-        parsed: dict,
-        demo_summary: str,
-    ) -> dict:
-        summary = (
-            self._clean_text(parsed.get("summary"))
-            or demo_summary
-            or "Минимальный демо-пакет для обсуждения решения."
-        )
-        return {
-            "project_name": self._clean_text(parsed.get("project_name")) or f"kwork-demo-{project.id}",
-            "summary": summary,
-            "stack": ["HTML", "Markdown"],
-            "run_steps": [
-                "Открыть index.html в браузере",
-                "Сверить checklist.md с фактической ошибкой на сайте",
-            ],
-            "files": [
-                {
-                    "path": "README.md",
-                    "content": self._fallback_readme(project, summary),
-                },
-                {
-                    "path": "checklist.md",
-                    "content": self._fallback_checklist(project),
-                },
-                {
-                    "path": "index.html",
-                    "content": self._fallback_html(project),
-                },
-            ],
-        }
-
-    def _fallback_readme(self, project: Project, summary: str) -> str:
-        return "\n".join(
-            [
-                "# Demo package",
-                "",
-                summary,
-                "",
-                "Это не полная реализация проекта, а компактный пакет для первичного обсуждения:",
-                "",
-                "- `checklist.md` фиксирует план диагностики и вопросы по ошибке",
-                "- `index.html` показывает минимальный шаблон страницы для воспроизведения и проверки исправления",
-                "",
-                f"Исходный заказ: {project.url}",
-            ]
-        )
-
-    def _fallback_checklist(self, project: Project) -> str:
-        description = self._clean_text(project.description) or "Описание ошибки в заказе не детализировано."
-        return "\n".join(
-            [
-                "# Checklist",
-                "",
-                "## Что уточнить",
-                "",
-                "- ссылка на страницу с ошибкой",
-                "- ожидаемое и фактическое поведение",
-                "- браузер, устройство и роль пользователя",
-                "- доступы к админке, репозиторию или хостингу",
-                "- шаги для воспроизведения",
-                "",
-                "## План диагностики",
-                "",
-                "1. Повторить ошибку на тестовом сценарии.",
-                "2. Проверить консоль браузера и сетевые запросы.",
-                "3. Локализовать причину на уровне frontend, backend, CMS или интеграции.",
-                "4. Подготовить минимальный фикс и проверить регрессии.",
-                "",
-                "## Описание из заказа",
-                "",
-                description[:1200],
-            ]
-        )
-
-    def _fallback_html(self, project: Project) -> str:
-        title = self._clean_text(project.title) or "Demo"
-        return f"""<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{self._escape_html_text(title)}</title>
-  <style>
-    body {{ font-family: Arial, sans-serif; margin: 32px; line-height: 1.5; color: #1f2937; }}
-    main {{ max-width: 760px; }}
-    .status {{ padding: 12px 14px; border: 1px solid #d1d5db; background: #f9fafb; }}
-    code {{ background: #f3f4f6; padding: 2px 4px; }}
-  </style>
-</head>
-<body>
-  <main>
-    <h1>{self._escape_html_text(title)}</h1>
-    <div class="status">Минимальная страница для фиксации сценария ошибки и проверки исправления.</div>
-    <h2>Проверяемый сценарий</h2>
-    <ol>
-      <li>Открыть проблемную страницу.</li>
-      <li>Повторить действие, при котором появляется ошибка.</li>
-      <li>Сравнить фактический результат с ожидаемым.</li>
-    </ol>
-    <h2>Что нужно от заказчика</h2>
-    <p>Ссылка на страницу, доступы и короткое описание шагов воспроизведения.</p>
-  </main>
-</body>
-</html>"""
-
-    def _escape_html_text(self, text: str) -> str:
-        return (
-            text.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-        )
-
     def _write_demo_project(
         self,
         project: Project,
@@ -514,6 +397,8 @@ class ResponseDraftService:
             content = self._clean_text(item.get("content"))
             if not relative_path or not content:
                 continue
+            if self._is_low_value_demo_file(relative_path.as_posix(), content):
+                continue
 
             full_path = output_dir / relative_path
             full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -521,7 +406,7 @@ class ResponseDraftService:
             written_paths.append(relative_path.as_posix())
 
         if not written_paths:
-            raise ValueError("Demo project response produced no valid files")
+            raise ValueError("Модель вернула только служебные материалы, а не демо-проект")
 
         if "README.md" not in written_paths:
             readme_path = output_dir / "README.md"
@@ -555,6 +440,24 @@ class ResponseDraftService:
         if any(part in {"", ".", ".."} for part in posix_path.parts):
             return None
         return Path(*posix_path.parts)
+
+    def _is_low_value_demo_file(self, path: str, content: str) -> bool:
+        lower_path = path.lower()
+        lower_content = content.lower()
+        if lower_path in {"checklist.md", "plan.md", "questions.md"}:
+            return True
+        if lower_path.endswith(".md") and not any(
+            marker in lower_content
+            for marker in ("```", "npm", "python", "uvicorn", "fastapi", "html", "script", "api")
+        ):
+            planning_markers = (
+                "что уточнить",
+                "план диагностики",
+                "ожидаемое и фактическое",
+                "шаги для воспроизведения",
+            )
+            return any(marker in lower_content for marker in planning_markers)
+        return False
 
     def _build_demo_readme(self, parsed: dict, demo_summary: str, written_paths: list[str]) -> str:
         stack = parsed.get("stack")
