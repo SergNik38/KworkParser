@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 
 import requests
@@ -230,6 +231,7 @@ class TelegramNotifier:
         payload = response.json()
         if not payload.get("ok"):
             raise RuntimeError(f"Telegram demo project API error: {payload!r}")
+        time.sleep(0.05)
 
     def send_demo_status(self, project: Project, text: str) -> None:
         if self.settings.dry_run:
@@ -394,6 +396,7 @@ class TelegramNotifier:
         body = response.json()
         if not body.get("ok"):
             raise RuntimeError(f"Telegram API error: {body!r}")
+        time.sleep(0.05)
 
     def _parse_feedback_update(
         self,

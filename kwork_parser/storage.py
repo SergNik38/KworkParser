@@ -115,6 +115,15 @@ class Storage:
             )
             """
         )
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_projects_status ON projects (notification_status)"
+        )
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_projects_notified ON projects (notified_at)"
+        )
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_feedback_type ON project_feedback (feedback)"
+        )
         self._migrate_schema()
         self._migrate_feedback_schema()
         self._migrate_response_drafts_schema()
