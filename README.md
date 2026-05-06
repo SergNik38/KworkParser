@@ -2,9 +2,11 @@
 
 > **Умный парсер Kwork с AI-анализом и Telegram-уведомлениями**
 
+[![CI](https://github.com/SergNik38/KworkParser/actions/workflows/ci.yml/badge.svg)](https://github.com/SergNik38/KworkParser/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker)](Dockerfile)
+[![GitHub stars](https://img.shields.io/github/stars/SergNik38/KworkParser?style=social)](https://github.com/SergNik38/KworkParser/stargazers)
 
 ## 📋 Что это?
 
@@ -323,6 +325,12 @@ tmux attach -t kwork
 - Проверьте `OPENROUTER_API_KEY` (должен быть действительный)
 - Убедитесь в наличии баланса на OpenRouter
 - Проверьте `OPENROUTER_MODEL` (используйте mini-версии для экономии)
+
+---
+
+## 🤝 Contributing
+
+Баги, идеи и PR приветствуются! Смотрите [CONTRIBUTING.md](CONTRIBUTING.md) для деталей.
 
 ---
 
