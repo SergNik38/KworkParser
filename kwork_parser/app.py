@@ -165,6 +165,32 @@ class Application:
                     exc_info=True,
                 )
 
+        for start_cmd in poll.start_commands:
+            self.storage.save_feedback(
+                ProjectFeedback(
+                    project_id=start_cmd.project_id,
+                    feedback="interesting",
+                    telegram_user_id=start_cmd.telegram_user_id,
+                    telegram_username=start_cmd.telegram_username,
+                    payload=start_cmd.payload,
+                )
+            )
+            candidate = self.storage.get_project_candidate(start_cmd.project_id)
+            if candidate:
+                try:
+                    self.notifier.send_private_details(
+                        start_cmd.chat_id,
+                        candidate.project,
+                        candidate.rule_result,
+                        candidate.ai_result,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to send private details for project %s",
+                        start_cmd.project_id,
+                        exc_info=True,
+                    )
+
         for command in poll.health_commands:
             try:
                 self.notifier.send_health(command, self._format_health_message())

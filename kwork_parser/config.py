@@ -68,6 +68,8 @@ class Settings:
     dry_run: bool
     telegram_bot_token: str | None
     telegram_chat_id: str | None
+    telegram_channel_mode: bool
+    telegram_bot_username: str | None
     openrouter_api_key: str | None
     openrouter_model: str | None
     openrouter_site_url: str | None
@@ -115,6 +117,8 @@ class Settings:
             dry_run=_parse_bool(os.getenv("KWORK_DRY_RUN"), True),
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN") or None,
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID") or None,
+            telegram_channel_mode=_parse_bool(os.getenv("TELEGRAM_CHANNEL_MODE"), False),
+            telegram_bot_username=os.getenv("TELEGRAM_BOT_USERNAME") or None,
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY") or None,
             openrouter_model=os.getenv("OPENROUTER_MODEL") or None,
             openrouter_site_url=os.getenv("OPENROUTER_SITE_URL") or None,

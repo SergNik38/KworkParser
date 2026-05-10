@@ -66,11 +66,22 @@ class TelegramDraftAction:
 
 
 @dataclass(slots=True)
+class TelegramStartCommand:
+    project_id: int
+    telegram_user_id: int
+    telegram_username: str
+    chat_id: int
+    update_id: int
+    payload: dict
+
+
+@dataclass(slots=True)
 class TelegramFeedbackPoll:
     actions: list[TelegramFeedbackUpdate]
     next_offset: int | None
     health_commands: list[TelegramHealthCommand] = field(default_factory=list)
     draft_actions: list[TelegramDraftAction] = field(default_factory=list)
+    start_commands: list[TelegramStartCommand] = field(default_factory=list)
 
 
 class TelegramNotifier:
@@ -84,10 +95,38 @@ class TelegramNotifier:
             logger.info("Dry-run notification preview:\n%s\n%s\n%s", "=" * 80, message, "=" * 80)
             return
 
-        self._send_message(
-            message,
-            reply_markup=self._build_reply_markup(project),
+        markup = (
+            self._build_channel_reply_markup(project)
+            if self.settings.telegram_channel_mode
+            else self._build_reply_markup(project)
         )
+        self._send_message(message, reply_markup=markup)
+
+    def send_private_details(
+        self,
+        telegram_user_id: int,
+        project: Project,
+        rule_result: ScoreResult,
+        ai_result: ScoreResult | None,
+    ) -> None:
+        message = self._format_message(project, rule_result, ai_result)
+        payload: dict[str, object] = {
+            "chat_id": telegram_user_id,
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+            "reply_markup": self._build_private_reply_markup(project),
+        }
+        response = self.session.post(
+            f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage",
+            json=payload,
+            timeout=self.settings.request_timeout_seconds,
+        )
+        response.raise_for_status()
+        body = response.json()
+        if not body.get("ok"):
+            raise RuntimeError(f"Telegram private details API error: {body!r}")
+        time.sleep(0.05)
 
     def fetch_feedback(self, offset: int | None) -> TelegramFeedbackPoll:
         if not self.settings.telegram_enabled:
@@ -118,6 +157,7 @@ class TelegramNotifier:
         actions: list[TelegramFeedbackUpdate] = []
         draft_actions: list[TelegramDraftAction] = []
         health_commands: list[TelegramHealthCommand] = []
+        start_commands: list[TelegramStartCommand] = []
         for update in updates:
             if not isinstance(update, dict):
                 continue
@@ -135,6 +175,11 @@ class TelegramNotifier:
                 draft_actions.append(draft_action)
                 continue
 
+            start_command = self._parse_start_command(update, update_id)
+            if start_command:
+                start_commands.append(start_command)
+                continue
+
             health_command = self._parse_health_command(update, update_id)
             if health_command:
                 health_commands.append(health_command)
@@ -144,18 +189,24 @@ class TelegramNotifier:
             next_offset=next_offset,
             health_commands=health_commands,
             draft_actions=draft_actions,
+            start_commands=start_commands,
         )
 
-    def answer_feedback(self, callback_query_id: str, feedback: str) -> None:
+    def answer_feedback(self, callback_query_id: str, feedback: str, *, override_text: str | None = None) -> None:
         if not self.settings.telegram_enabled or not callback_query_id:
             return
 
-        label = FEEDBACK_ACTION_LABELS.get(feedback, feedback)
+        if override_text is not None:
+            text = override_text
+        else:
+            label = FEEDBACK_ACTION_LABELS.get(feedback, feedback)
+            text = label if feedback not in FEEDBACK_ACTION_LABELS else f"Сохранено: {label}"
+
         response = self.session.post(
             f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/answerCallbackQuery",
             json={
                 "callback_query_id": callback_query_id,
-                "text": label if feedback not in FEEDBACK_ACTION_LABELS else f"Сохранено: {label}",
+                "text": text,
                 "show_alert": False,
             },
             timeout=self.settings.request_timeout_seconds,
@@ -301,6 +352,58 @@ class TelegramNotifier:
                     {
                         "text": FEEDBACK_ACTION_LABELS["hide_similar"],
                         "callback_data": f"fb:{project.id}:hide_similar",
+                    },
+                ],
+                [
+                    {
+                        "text": "Открыть заказ",
+                        "url": project.url,
+                    },
+                ],
+            ]
+        }
+
+    def _build_channel_reply_markup(self, project: Project) -> dict:
+        username = self.settings.telegram_bot_username
+        if username:
+            interesting_button: dict = {
+                "text": FEEDBACK_ACTION_LABELS["interesting"],
+                "url": f"https://t.me/{username}?start=p{project.id}",
+            }
+        else:
+            interesting_button = {
+                "text": FEEDBACK_ACTION_LABELS["interesting"],
+                "callback_data": f"fb:{project.id}:interesting",
+            }
+        return {
+            "inline_keyboard": [
+                [
+                    interesting_button,
+                    {
+                        "text": "Открыть заказ",
+                        "url": project.url,
+                    },
+                ],
+            ]
+        }
+
+    def _build_private_reply_markup(self, project: Project) -> dict:
+        return {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": FEEDBACK_ACTION_LABELS["miss"],
+                        "callback_data": f"fb:{project.id}:miss",
+                    },
+                    {
+                        "text": FEEDBACK_ACTION_LABELS["hide_similar"],
+                        "callback_data": f"fb:{project.id}:hide_similar",
+                    },
+                ],
+                [
+                    {
+                        "text": DRAFT_ACTION_LABELS["generate"],
+                        "callback_data": f"draft:{project.id}:generate",
                     },
                 ],
                 [
@@ -525,6 +628,54 @@ class TelegramNotifier:
         if len(text) <= limit:
             return text
         return text[: limit - 1].rstrip() + "…"
+
+    def _parse_start_command(
+        self,
+        update: dict,
+        update_id: int | None,
+    ) -> TelegramStartCommand | None:
+        message = update.get("message")
+        if not isinstance(message, dict) or update_id is None:
+            return None
+
+        text = message.get("text")
+        if not isinstance(text, str):
+            return None
+
+        parts = text.strip().split(maxsplit=1)
+        command = parts[0].lower()
+        if not (command == "/start" or command.startswith("/start@")):
+            return None
+
+        if len(parts) < 2 or not parts[1].strip().startswith("p"):
+            return None
+
+        project_id = self._parse_int(parts[1].strip()[1:])
+        if project_id is None:
+            return None
+
+        chat = message.get("chat") or {}
+        if not isinstance(chat, dict):
+            return None
+        chat_id = self._parse_int(chat.get("id"))
+        if chat_id is None:
+            return None
+
+        user = message.get("from") or {}
+        if not isinstance(user, dict):
+            user = {}
+        telegram_user_id = self._parse_int(user.get("id"))
+        if telegram_user_id is None:
+            return None
+
+        return TelegramStartCommand(
+            project_id=project_id,
+            telegram_user_id=telegram_user_id,
+            telegram_username=str(user.get("username") or "").strip(),
+            chat_id=chat_id,
+            update_id=update_id,
+            payload=update,
+        )
 
     def _parse_int(self, value: object) -> int | None:
         if value is None or isinstance(value, bool):
