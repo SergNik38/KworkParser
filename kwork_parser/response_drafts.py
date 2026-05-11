@@ -59,7 +59,7 @@ class ResponseDraftService:
             load_response_draft_prompt(),
             prompt_payload,
             temperature=0.35,
-            max_tokens=700,
+            max_tokens=4000,
         )
 
         draft_text = self._clean_text(parsed.get("draft_text"))
@@ -91,7 +91,7 @@ class ResponseDraftService:
             load_demo_project_prompt(),
             prompt_payload,
             temperature=0.25,
-            max_tokens=2400,
+            max_tokens=6000,
         )
         parsed = self._extract_json(raw_content)
         normalized = self._normalize_demo_payload(parsed)
@@ -280,7 +280,7 @@ class ResponseDraftService:
                 "raw_model_response": raw_content,
             },
             temperature=0.0,
-            max_tokens=2600,
+            max_tokens=6000,
         )
 
     def _normalize_demo_payload(self, parsed: dict) -> dict:
