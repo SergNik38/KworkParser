@@ -200,9 +200,18 @@ class ResponseDraftService:
                 data = response.json()
                 if not isinstance(data, dict):
                     raise ValueError("Response draft JSON must be an object")
-                content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+                choices = data.get("choices") or []
+                first_choice = choices[0] if choices else {}
+                finish_reason = first_choice.get("finish_reason")
+                content = ((first_choice.get("message") or {}).get("content") or "").strip()
                 if not content:
-                    logger.warning("Response draft API returned empty content. Raw response: %s", json.dumps(data, ensure_ascii=False)[:500])
+                    logger.warning(
+                        "Response draft API returned empty content. model=%s finish_reason=%s choices_count=%d raw=%s",
+                        self._model,
+                        finish_reason,
+                        len(choices),
+                        json.dumps(data, ensure_ascii=False)[:800],
+                    )
                     raise ValueError("Response draft model returned empty content")
                 return content
             except (requests.RequestException, ValueError) as exc:
