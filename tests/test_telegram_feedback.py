@@ -194,16 +194,16 @@ class FakeDraftNotifier:
         self.demo_statuses: list[tuple[int, str]] = []
         self.answers: list[tuple[str, str]] = []
 
-    def send_response_draft(self, project: Project, draft: ResponseDraft) -> None:
+    def send_response_draft(self, project: Project, draft: ResponseDraft, *, chat_id: int | None = None) -> None:
         self.drafts.append((project.id, draft.text, draft.demo_available))
 
-    def send_demo_project(self, project: Project, demo_project: GeneratedDemoProject) -> None:
+    def send_demo_project(self, project: Project, demo_project: GeneratedDemoProject, *, chat_id: int | None = None) -> None:
         self.demo_projects.append((project.id, demo_project.summary))
 
-    def send_demo_status(self, project: Project, text: str) -> None:
+    def send_demo_status(self, project: Project, text: str, *, chat_id: int | None = None) -> None:
         self.demo_statuses.append((project.id, text))
 
-    def answer_feedback(self, callback_query_id: str, feedback: str) -> None:
+    def answer_feedback(self, callback_query_id: str, feedback: str, *, override_text: str | None = None) -> None:
         self.answers.append((callback_query_id, feedback))
 
 
