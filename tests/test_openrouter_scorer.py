@@ -60,9 +60,12 @@ def make_project() -> Project:
 
 
 class FakeResponse:
-    def __init__(self, payload: object, *, raises: Exception | None = None) -> None:
+    def __init__(self, payload: object, *, raises: Exception | None = None, status_code: int = 200) -> None:
         self.payload = payload
         self.raises = raises
+        self.status_code = status_code
+        self.ok = status_code < 400
+        self.text = ""
 
     def raise_for_status(self) -> None:
         if self.raises:
