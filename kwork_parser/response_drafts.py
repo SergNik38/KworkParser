@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import time
@@ -8,6 +9,8 @@ import zipfile
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 from pathlib import PurePosixPath
 
 import requests
@@ -199,6 +202,7 @@ class ResponseDraftService:
                     raise ValueError("Response draft JSON must be an object")
                 content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
                 if not content:
+                    logger.warning("Response draft API returned empty content. Raw response: %s", json.dumps(data, ensure_ascii=False)[:500])
                     raise ValueError("Response draft model returned empty content")
                 return content
             except (requests.RequestException, ValueError) as exc:

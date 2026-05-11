@@ -281,7 +281,7 @@ class Application:
         try:
             if action.action == "sent":
                 self.storage.mark_response_draft_sent_manually(action.project_id)
-                self.notifier.answer_feedback(action.callback_query_id, "Отклик отмечен как отправленный")
+                self.notifier.answer_feedback(action.callback_query_id, "Отклик отмечен как отправленным")
                 return
 
             candidate = self.storage.get_project_candidate(action.project_id)
@@ -294,6 +294,7 @@ class Application:
                 if not draft or not draft.demo_available:
                     self.notifier.answer_feedback(action.callback_query_id, "Для этого заказа пока не хватает данных на демо")
                     return
+                self.notifier.answer_feedback(action.callback_query_id, "Готовлю демо...")
                 generated, error_text = self._send_demo_project(
                     candidate.project,
                     candidate.rule_result,
@@ -310,23 +311,16 @@ class Application:
                             action.project_id,
                             exc_info=True,
                         )
-                self.notifier.answer_feedback(
-                    action.callback_query_id,
-                    "Демо подготовлено" if generated else "Не удалось подготовить демо",
-                )
                 return
 
+            self.notifier.answer_feedback(action.callback_query_id, "Генерирую отклик...")
             variant = "default" if action.action in {"generate", "regenerate"} else action.action
-            generated = self._send_response_draft(
+            self._send_response_draft(
                 candidate.project,
                 candidate.rule_result,
                 candidate.ai_result,
                 variant=variant,
                 chat_id=action.chat_id,
-            )
-            self.notifier.answer_feedback(
-                action.callback_query_id,
-                "Черновик обновлен" if generated else "Не удалось обновить черновик",
             )
         except Exception:
             logger.warning("Draft action handling failed for project %s", action.project_id, exc_info=True)
