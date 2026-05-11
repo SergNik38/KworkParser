@@ -445,7 +445,7 @@ class TelegramFeedbackTests(unittest.TestCase):
                 [(1001, "Можно показать небольшой прототип.")],
             )
             self.assertEqual(app.notifier.demo_projects, [(1001, "Можно показать небольшой прототип.")])
-            self.assertEqual(app.notifier.answers, [("demo-callback", "Демо подготовлено")])
+            self.assertEqual(app.notifier.answers, [("demo-callback", "Готовлю демо...")])
             self.assertEqual(draft.demo_path, "/tmp/demo-project")
             self.assertEqual(draft.demo_archive_path, "/tmp/demo-project.zip")
 
@@ -494,7 +494,7 @@ class TelegramFeedbackTests(unittest.TestCase):
                 app.notifier.demo_statuses,
                 [(1001, "Не удалось подготовить демо: модель не вернула валидные файлы демо")],
             )
-            self.assertEqual(app.notifier.answers, [("demo-callback", "Не удалось подготовить демо")])
+            self.assertEqual(app.notifier.answers, [("demo-callback", "Готовлю демо...")])
 
     def test_application_marks_response_draft_sent_manually(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

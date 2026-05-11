@@ -281,7 +281,7 @@ class Application:
         try:
             if action.action == "sent":
                 self.storage.mark_response_draft_sent_manually(action.project_id)
-                self.notifier.answer_feedback(action.callback_query_id, "Отклик отмечен как отправленным")
+                self.notifier.answer_feedback(action.callback_query_id, "Отклик отмечен как отправленный")
                 return
 
             candidate = self.storage.get_project_candidate(action.project_id)
