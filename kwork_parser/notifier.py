@@ -62,6 +62,7 @@ class TelegramDraftAction:
     callback_query_id: str
     telegram_user_id: int | None
     telegram_username: str
+    chat_id: int | None
     payload: dict
 
 
@@ -240,7 +241,7 @@ class TelegramNotifier:
         if not payload.get("ok"):
             raise RuntimeError(f"Telegram health response API error: {payload!r}")
 
-    def send_response_draft(self, project: Project, draft: ResponseDraft) -> None:
+    def send_response_draft(self, project: Project, draft: ResponseDraft, *, chat_id: int | None = None) -> None:
         if self.settings.dry_run:
             logger.info("Dry-run response draft for project %s:\n%s", project.id, draft.text)
             return
@@ -248,9 +249,10 @@ class TelegramNotifier:
         self._send_message(
             self._format_response_draft(project, draft),
             reply_markup=self._build_draft_reply_markup(project, draft),
+            chat_id=chat_id,
         )
 
-    def send_demo_project(self, project: Project, demo_project: GeneratedDemoProject) -> None:
+    def send_demo_project(self, project: Project, demo_project: GeneratedDemoProject, *, chat_id: int | None = None) -> None:
         if self.settings.dry_run:
             logger.info(
                 "Dry-run demo project for %s stored in %s",
@@ -262,11 +264,12 @@ class TelegramNotifier:
         if not self.settings.telegram_enabled:
             raise RuntimeError("Telegram is disabled: configure TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
 
+        target_chat = chat_id if chat_id is not None else self.settings.telegram_chat_id
         with demo_project.archive_path.open("rb") as document:
             response = self.session.post(
                 f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendDocument",
                 data={
-                    "chat_id": self.settings.telegram_chat_id,
+                    "chat_id": target_chat,
                     "caption": self._format_demo_caption(project, demo_project),
                     "parse_mode": "HTML",
                 },
@@ -285,7 +288,7 @@ class TelegramNotifier:
             raise RuntimeError(f"Telegram demo project API error: {payload!r}")
         time.sleep(0.05)
 
-    def send_demo_status(self, project: Project, text: str) -> None:
+    def send_demo_status(self, project: Project, text: str, *, chat_id: int | None = None) -> None:
         if self.settings.dry_run:
             logger.info("Dry-run demo status for project %s: %s", project.id, text)
             return
@@ -294,7 +297,8 @@ class TelegramNotifier:
                 f"<b>Демо</b>\n"
                 f"<b>Проект:</b> {html.escape(project.title)}\n"
                 f"{html.escape(text)}"
-            )
+            ),
+            chat_id=chat_id,
         )
 
     def _format_message(self, project: Project, rule_result: ScoreResult, ai_result: ScoreResult | None) -> str:
@@ -478,12 +482,12 @@ class TelegramNotifier:
             f"<b>Что внутри:</b> {html.escape(demo_project.summary)}"
         )
 
-    def _send_message(self, text: str, reply_markup: dict | None = None) -> None:
+    def _send_message(self, text: str, reply_markup: dict | None = None, *, chat_id: int | str | None = None) -> None:
         if not self.settings.telegram_enabled:
             raise RuntimeError("Telegram is disabled: configure TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
 
         payload: dict[str, object] = {
-            "chat_id": self.settings.telegram_chat_id,
+            "chat_id": chat_id if chat_id is not None else self.settings.telegram_chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
@@ -564,6 +568,10 @@ class TelegramNotifier:
         if not isinstance(user, dict):
             user = {}
 
+        message = callback_query.get("message") or {}
+        chat = message.get("chat") if isinstance(message, dict) else None
+        chat_id = self._parse_int(chat.get("id") if isinstance(chat, dict) else None)
+
         return TelegramDraftAction(
             project_id=project_id,
             action=action,
@@ -571,6 +579,7 @@ class TelegramNotifier:
             callback_query_id=str(callback_query.get("id") or ""),
             telegram_user_id=self._parse_int(user.get("id")),
             telegram_username=str(user.get("username") or "").strip(),
+            chat_id=chat_id,
             payload=update,
         )
 

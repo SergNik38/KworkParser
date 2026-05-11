@@ -225,6 +225,8 @@ class Application:
         rule_result: ScoreResult,
         ai_result: ScoreResult | None,
         variant: str,
+        *,
+        chat_id: int | None = None,
     ) -> bool:
         if not self.response_draft_generator:
             return False
@@ -239,7 +241,7 @@ class Application:
                 demo_summary=draft_result.demo_summary,
             )
             self.storage.save_response_draft(draft)
-            self.notifier.send_response_draft(project, draft)
+            self.notifier.send_response_draft(project, draft, chat_id=chat_id)
             return True
         except Exception:
             logger.warning("Response draft generation failed for project %s", project.id, exc_info=True)
@@ -251,6 +253,8 @@ class Application:
         rule_result: ScoreResult,
         ai_result: ScoreResult | None,
         demo_summary: str,
+        *,
+        chat_id: int | None = None,
     ) -> tuple[bool, str]:
         if not self.response_draft_generator:
             return False, "Генератор откликов не настроен"
@@ -267,7 +271,7 @@ class Application:
                 str(demo_project.output_dir),
                 str(demo_project.archive_path),
             )
-            self.notifier.send_demo_project(project, demo_project)
+            self.notifier.send_demo_project(project, demo_project, chat_id=chat_id)
             return True, ""
         except Exception as exc:
             logger.warning("Demo project generation failed for project %s", project.id, exc_info=True)
@@ -295,10 +299,11 @@ class Application:
                     candidate.rule_result,
                     candidate.ai_result,
                     demo_summary=draft.demo_summary,
+                    chat_id=action.chat_id,
                 )
                 if not generated:
                     try:
-                        self.notifier.send_demo_status(candidate.project, error_text)
+                        self.notifier.send_demo_status(candidate.project, error_text, chat_id=action.chat_id)
                     except Exception:
                         logger.warning(
                             "Failed to send demo error status for project %s",
@@ -317,6 +322,7 @@ class Application:
                 candidate.rule_result,
                 candidate.ai_result,
                 variant=variant,
+                chat_id=action.chat_id,
             )
             self.notifier.answer_feedback(
                 action.callback_query_id,

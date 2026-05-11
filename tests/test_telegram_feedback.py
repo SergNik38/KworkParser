@@ -434,6 +434,7 @@ class TelegramFeedbackTests(unittest.TestCase):
                     callback_query_id="demo-callback",
                     telegram_user_id=123,
                     telegram_username="user",
+                    chat_id=123,
                     payload={},
                 )
             )
@@ -484,6 +485,7 @@ class TelegramFeedbackTests(unittest.TestCase):
                     callback_query_id="demo-callback",
                     telegram_user_id=123,
                     telegram_username="user",
+                    chat_id=123,
                     payload={},
                 )
             )
@@ -515,6 +517,7 @@ class TelegramFeedbackTests(unittest.TestCase):
                     callback_query_id="draft-callback",
                     telegram_user_id=123,
                     telegram_username="user",
+                    chat_id=123,
                     payload={},
                 )
             )
