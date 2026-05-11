@@ -196,6 +196,12 @@ class ResponseDraftService:
                     json=request_body,
                     timeout=self._timeout_seconds,
                 )
+                if not response.ok:
+                    logger.warning(
+                        "Response draft HTTP error %d: %s",
+                        response.status_code,
+                        response.text[:600],
+                    )
                 response.raise_for_status()
                 data = response.json()
                 if not isinstance(data, dict):
@@ -206,11 +212,11 @@ class ResponseDraftService:
                 content = ((first_choice.get("message") or {}).get("content") or "").strip()
                 if not content:
                     logger.warning(
-                        "Response draft API returned empty content. model=%s finish_reason=%s choices_count=%d raw=%s",
+                        "Response draft empty content: model=%s finish_reason=%s choices=%d raw=%s",
                         self._model,
                         finish_reason,
                         len(choices),
-                        json.dumps(data, ensure_ascii=False)[:800],
+                        json.dumps(data, ensure_ascii=False)[:1000],
                     )
                     raise ValueError("Response draft model returned empty content")
                 return content
