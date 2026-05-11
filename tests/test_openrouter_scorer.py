@@ -184,8 +184,8 @@ class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
             result,
             ResponseDraftResult(
                 text="Здравствуйте! Готов помочь с API-интеграцией.",
-                demo_available=True,
-                demo_summary="Можно показать мини-демо формы и API-обмена.",
+                demo_available=False,
+                demo_summary="",
             ),
         )
 
@@ -249,8 +249,8 @@ class OpenRouterResponseDraftGeneratorTests(unittest.TestCase):
             ScoreResult(80, "ai", ["integration"]),
         )
 
-        self.assertTrue(result.demo_available)
-        self.assertIn("мини-бота", result.demo_summary)
+        self.assertFalse(result.demo_available)
+        self.assertEqual(result.demo_summary, "")
 
     def test_generate_demo_project_writes_files_and_archive(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

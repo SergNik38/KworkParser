@@ -66,16 +66,10 @@ class ResponseDraftService:
         if not draft_text:
             raise ValueError("Response draft is empty")
 
-        demo_available = self._parse_bool(parsed.get("demo_available"))
-        demo_summary = self._clean_text(parsed.get("demo_summary")) if demo_available else ""
-        inferred_demo_summary = self._infer_demo_summary(project)
-        if inferred_demo_summary and (not demo_available or not demo_summary):
-            demo_available = True
-            demo_summary = inferred_demo_summary
         return ResponseDraftResult(
             text=draft_text,
-            demo_available=demo_available,
-            demo_summary=demo_summary,
+            demo_available=False,
+            demo_summary="",
         )
 
     def generate_demo_project(
