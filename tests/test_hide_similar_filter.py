@@ -31,6 +31,8 @@ def make_settings(database_path: Path) -> Settings:
         dry_run=True,
         telegram_bot_token=None,
         telegram_chat_id=None,
+        telegram_channel_mode=False,
+        telegram_bot_username=None,
         openrouter_api_key=None,
         openrouter_model=None,
         openrouter_site_url=None,

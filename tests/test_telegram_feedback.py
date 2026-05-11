@@ -40,6 +40,8 @@ def make_settings(database_path: Path | None = None, telegram_chat_id: str = "ch
         dry_run=False,
         telegram_bot_token="token",
         telegram_chat_id=telegram_chat_id,
+        telegram_channel_mode=False,
+        telegram_bot_username=None,
         openrouter_api_key=None,
         openrouter_model=None,
         openrouter_site_url=None,
