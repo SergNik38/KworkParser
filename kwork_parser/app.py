@@ -34,7 +34,9 @@ class Application:
 
     def run_once(self) -> int:
         self._sync_telegram_feedback()
+        return self._run_kwork_cycle()
 
+    def _run_kwork_cycle(self) -> int:
         bootstrap_mode = self.settings.skip_existing_on_first_run and self.storage.is_empty()
         new_project_ids: list[int] = []
         hidden_projects = self.storage.get_hide_similar_projects()
@@ -116,13 +118,21 @@ class Application:
         return processed
 
     def run_forever(self) -> None:
+        last_kwork_poll = 0.0
         while True:
             try:
-                processed = self.run_once()
-                logger.info("Processed %s notification candidates", processed)
+                self._sync_telegram_feedback()
             except Exception as exc:
-                logger.exception("Polling loop failed: %s", exc)
-            time.sleep(self.settings.poll_interval_seconds)
+                logger.exception("Telegram feedback sync failed: %s", exc)
+
+            now = time.monotonic()
+            if now - last_kwork_poll >= self.settings.poll_interval_seconds:
+                try:
+                    processed = self._run_kwork_cycle()
+                    logger.info("Processed %s notification candidates", processed)
+                except Exception as exc:
+                    logger.exception("Kwork polling loop failed: %s", exc)
+                last_kwork_poll = time.monotonic()
 
     def _score_with_ai(self, project: Project, rule_result: ScoreResult) -> ScoreResult | None:
         if not self.ai_scorer:

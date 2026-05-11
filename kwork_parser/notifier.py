@@ -132,8 +132,9 @@ class TelegramNotifier:
         if not self.settings.telegram_enabled:
             return TelegramFeedbackPoll(actions=[], next_offset=offset)
 
+        long_poll_timeout = 10
         params: dict[str, object] = {
-            "timeout": 0,
+            "timeout": long_poll_timeout,
             "allowed_updates": json.dumps(["callback_query", "message"]),
         }
         if offset is not None:
@@ -142,7 +143,7 @@ class TelegramNotifier:
         response = self.session.get(
             f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/getUpdates",
             params=params,
-            timeout=self.settings.request_timeout_seconds,
+            timeout=long_poll_timeout + self.settings.request_timeout_seconds,
         )
         response.raise_for_status()
         payload = response.json()
