@@ -58,7 +58,7 @@ class ResponseDraftService:
         parsed = self._request_json(
             load_response_draft_prompt(),
             prompt_payload,
-            temperature=0.35,
+            temperature=0.6,
             max_tokens=4000,
         )
 
