@@ -438,6 +438,7 @@ class TelegramFeedbackTests(unittest.TestCase):
                     payload={},
                 )
             )
+            app.join_draft_threads()
 
             draft = app.storage.get_response_draft(project.id)
             self.assertEqual(
@@ -489,6 +490,7 @@ class TelegramFeedbackTests(unittest.TestCase):
                     payload={},
                 )
             )
+            app.join_draft_threads()
 
             self.assertEqual(
                 app.notifier.demo_statuses,

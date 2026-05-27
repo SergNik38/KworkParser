@@ -36,6 +36,7 @@ class Application:
         self.response_draft_generator = ResponseDraftService(settings) if settings.response_draft_enabled else None
         self.notifier = TelegramNotifier(settings)
         self._draft_semaphore = threading.Semaphore(_MAX_CONCURRENT_DRAFTS)
+        self._draft_threads: list[threading.Thread] = []
 
     def run_once(self) -> int:
         self._sync_telegram_feedback()
@@ -300,22 +301,25 @@ class Application:
                     self.notifier.answer_feedback(action.callback_query_id, "Для этого заказа пока не хватает данных на демо")
                     return
                 self.notifier.answer_feedback(action.callback_query_id, "Готовлю демо...")
-                threading.Thread(
-                    target=self._run_demo_in_background,
-                    args=(action, candidate, draft),
-                    daemon=True,
-                ).start()
+                self._start_draft_thread(self._run_demo_in_background, action, candidate, draft)
                 return
 
             self.notifier.answer_feedback(action.callback_query_id, "Генерирую отклик...")
             variant = "default" if action.action in {"generate", "regenerate"} else action.action
-            threading.Thread(
-                target=self._run_draft_in_background,
-                args=(action, candidate, variant),
-                daemon=True,
-            ).start()
+            self._start_draft_thread(self._run_draft_in_background, action, candidate, variant)
         except Exception:
             logger.warning("Draft action handling failed for project %s", action.project_id, exc_info=True)
+
+    def _start_draft_thread(self, target: object, *args: object) -> None:
+        t = threading.Thread(target=target, args=args, daemon=True)
+        self._draft_threads.append(t)
+        t.start()
+
+    def join_draft_threads(self, timeout: float = 10.0) -> None:
+        """Wait for all background draft threads to finish. Used in tests."""
+        for t in list(self._draft_threads):
+            t.join(timeout=timeout)
+        self._draft_threads.clear()
 
     def _run_draft_in_background(
         self,
