@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import logging
+import threading
 import time
 from datetime import datetime
 
@@ -22,6 +23,9 @@ from .storage import HealthSnapshot, ProjectFeedback, ResponseDraft, Storage
 logger = logging.getLogger(__name__)
 
 
+_MAX_CONCURRENT_DRAFTS = 3
+
+
 class Application:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -31,6 +35,7 @@ class Application:
         self.ai_scorer = OpenRouterScorer(settings) if settings.ai_enabled else None
         self.response_draft_generator = ResponseDraftService(settings) if settings.response_draft_enabled else None
         self.notifier = TelegramNotifier(settings)
+        self._draft_semaphore = threading.Semaphore(_MAX_CONCURRENT_DRAFTS)
 
     def run_once(self) -> int:
         self._sync_telegram_feedback()
@@ -295,26 +300,41 @@ class Application:
                     self.notifier.answer_feedback(action.callback_query_id, "Для этого заказа пока не хватает данных на демо")
                     return
                 self.notifier.answer_feedback(action.callback_query_id, "Готовлю демо...")
-                generated, error_text = self._send_demo_project(
-                    candidate.project,
-                    candidate.rule_result,
-                    candidate.ai_result,
-                    demo_summary=draft.demo_summary,
-                    chat_id=action.chat_id,
-                )
-                if not generated:
-                    try:
-                        self.notifier.send_demo_status(candidate.project, error_text, chat_id=action.chat_id)
-                    except Exception:
-                        logger.warning(
-                            "Failed to send demo error status for project %s",
-                            action.project_id,
-                            exc_info=True,
-                        )
+                threading.Thread(
+                    target=self._run_demo_in_background,
+                    args=(action, candidate, draft),
+                    daemon=True,
+                ).start()
                 return
 
             self.notifier.answer_feedback(action.callback_query_id, "Генерирую отклик...")
             variant = "default" if action.action in {"generate", "regenerate"} else action.action
+            threading.Thread(
+                target=self._run_draft_in_background,
+                args=(action, candidate, variant),
+                daemon=True,
+            ).start()
+        except Exception:
+            logger.warning("Draft action handling failed for project %s", action.project_id, exc_info=True)
+
+    def _run_draft_in_background(
+        self,
+        action: TelegramDraftAction,
+        candidate: object,
+        variant: str,
+    ) -> None:
+        if not self._draft_semaphore.acquire(blocking=False):
+            logger.warning("Draft semaphore full, skipping generation for project %s", action.project_id)
+            try:
+                self.notifier.send_demo_status(
+                    candidate.project,
+                    "Слишком много одновременных запросов, попробуй чуть позже",
+                    chat_id=action.chat_id,
+                )
+            except Exception:
+                pass
+            return
+        try:
             self._send_response_draft(
                 candidate.project,
                 candidate.rule_result,
@@ -323,7 +343,48 @@ class Application:
                 chat_id=action.chat_id,
             )
         except Exception:
-            logger.warning("Draft action handling failed for project %s", action.project_id, exc_info=True)
+            logger.warning("Background draft generation failed for project %s", action.project_id, exc_info=True)
+        finally:
+            self._draft_semaphore.release()
+
+    def _run_demo_in_background(
+        self,
+        action: TelegramDraftAction,
+        candidate: object,
+        draft: object,
+    ) -> None:
+        if not self._draft_semaphore.acquire(blocking=False):
+            logger.warning("Draft semaphore full, skipping demo for project %s", action.project_id)
+            try:
+                self.notifier.send_demo_status(
+                    candidate.project,
+                    "Слишком много одновременных запросов, попробуй чуть позже",
+                    chat_id=action.chat_id,
+                )
+            except Exception:
+                pass
+            return
+        try:
+            generated, error_text = self._send_demo_project(
+                candidate.project,
+                candidate.rule_result,
+                candidate.ai_result,
+                demo_summary=draft.demo_summary,
+                chat_id=action.chat_id,
+            )
+            if not generated:
+                try:
+                    self.notifier.send_demo_status(candidate.project, error_text, chat_id=action.chat_id)
+                except Exception:
+                    logger.warning(
+                        "Failed to send demo error status for project %s",
+                        action.project_id,
+                        exc_info=True,
+                    )
+        except Exception:
+            logger.warning("Background demo generation failed for project %s", action.project_id, exc_info=True)
+        finally:
+            self._draft_semaphore.release()
 
     def _format_health_message(self) -> str:
         snapshot = self.storage.get_health_snapshot()

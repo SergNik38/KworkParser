@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,8 +52,9 @@ class Storage:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(self.path)
+        self.connection = sqlite3.connect(self.path, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
+        self._lock = threading.Lock()
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -372,32 +374,33 @@ class Storage:
         )
 
     def save_response_draft(self, draft: ResponseDraft) -> None:
-        self.connection.execute(
-            """
-            INSERT INTO response_drafts (
-                project_id, text, variant, demo_available, demo_summary,
-                demo_path, demo_archive_path, status, updated_at
+        with self._lock:
+            self.connection.execute(
+                """
+                INSERT INTO response_drafts (
+                    project_id, text, variant, demo_available, demo_summary,
+                    demo_path, demo_archive_path, status, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, NULL, NULL, 'draft', CURRENT_TIMESTAMP)
+                ON CONFLICT(project_id) DO UPDATE SET
+                    text = excluded.text,
+                    variant = excluded.variant,
+                    demo_available = excluded.demo_available,
+                    demo_summary = excluded.demo_summary,
+                    demo_path = NULL,
+                    demo_archive_path = NULL,
+                    status = 'draft',
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    draft.project_id,
+                    draft.text,
+                    draft.variant,
+                    1 if draft.demo_available else 0,
+                    draft.demo_summary or None,
+                ),
             )
-            VALUES (?, ?, ?, ?, ?, NULL, NULL, 'draft', CURRENT_TIMESTAMP)
-            ON CONFLICT(project_id) DO UPDATE SET
-                text = excluded.text,
-                variant = excluded.variant,
-                demo_available = excluded.demo_available,
-                demo_summary = excluded.demo_summary,
-                demo_path = NULL,
-                demo_archive_path = NULL,
-                status = 'draft',
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (
-                draft.project_id,
-                draft.text,
-                draft.variant,
-                1 if draft.demo_available else 0,
-                draft.demo_summary or None,
-            ),
-        )
-        self.connection.commit()
+            self.connection.commit()
 
     def get_response_draft(self, project_id: int) -> ResponseDraft | None:
         row = self.connection.execute(
@@ -421,17 +424,18 @@ class Storage:
         )
 
     def save_demo_project_artifacts(self, project_id: int, demo_path: str, demo_archive_path: str) -> None:
-        self.connection.execute(
-            """
-            UPDATE response_drafts
-            SET demo_path = ?,
-                demo_archive_path = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE project_id = ?
-            """,
-            (demo_path, demo_archive_path, project_id),
-        )
-        self.connection.commit()
+        with self._lock:
+            self.connection.execute(
+                """
+                UPDATE response_drafts
+                SET demo_path = ?,
+                    demo_archive_path = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE project_id = ?
+                """,
+                (demo_path, demo_archive_path, project_id),
+            )
+            self.connection.commit()
 
     def mark_response_draft_sent_manually(self, project_id: int) -> None:
         self.connection.execute(

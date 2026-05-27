@@ -1,4 +1,35 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Env & secrets
 .env
+.env.*
+!.env.example
+
+# Project data
 data/
+*.db
+*.sqlite
+*.sqlite3
+
+# RuFlo / claude-flow runtime
+.claude-flow/
+.swarm/
+.claude/memory.db
+
+# Logs & temp
+*.log
+tmp/
+temp/
+
+# OS
+.DS_Store
+Thumbs.db
