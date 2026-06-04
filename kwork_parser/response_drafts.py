@@ -51,9 +51,9 @@ class ResponseDraftService:
     ) -> ResponseDraftResult:
         prompt_payload = self._build_base_payload(project, rule_result, ai_result, variant)
         if variant == "short":
-            prompt_payload["extra_instructions"] += "\nСделай отклик заметно короче: 3-5 предложений."
+            prompt_payload["extra_instructions"] += "\nСделай отклик короче обычного: 2-3 предложения максимум, только самое главное."
         elif variant == "questions":
-            prompt_payload["extra_instructions"] += "\nДобавь отдельный короткий блок уточняющих вопросов."
+            prompt_payload["extra_instructions"] += "\nДобавь в конце 2-3 конкретных уточняющих вопроса отдельным блоком."
 
         parsed = self._request_json(
             load_response_draft_prompt(),
