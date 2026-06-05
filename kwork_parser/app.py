@@ -339,15 +339,32 @@ class Application:
                 pass
             return
         try:
-            self._send_response_draft(
+            success = self._send_response_draft(
                 candidate.project,
                 candidate.rule_result,
                 candidate.ai_result,
                 variant=variant,
                 chat_id=action.chat_id,
             )
+            if not success:
+                try:
+                    self.notifier.send_demo_status(
+                        candidate.project,
+                        "Не удалось сгенерировать отклик, попробуй позже",
+                        chat_id=action.chat_id,
+                    )
+                except Exception:
+                    pass
         except Exception:
             logger.warning("Background draft generation failed for project %s", action.project_id, exc_info=True)
+            try:
+                self.notifier.send_demo_status(
+                    candidate.project,
+                    "Не удалось сгенерировать отклик, попробуй позже",
+                    chat_id=action.chat_id,
+                )
+            except Exception:
+                pass
         finally:
             self._draft_semaphore.release()
 
